@@ -1,0 +1,93 @@
+paths:
+  /auth/nonce:
+    get:
+      tags:
+        - Auth
+      summary: Generates a nonce for an address
+      produces:
+        - application/json
+      parameters:
+        - in: query
+          name: address
+          description: Wallet address requesting a nonce
+          required: true
+          type: string
+      responses:
+        200:
+          description: A generated nonce
+          schema:
+            type: object
+            properties:
+              nonce:
+                type: string
+  /auth/verify:
+    post:
+      tags:
+        - Auth
+      summary: Verifies a signed authentication message
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - in: body
+          name: authentication
+          description: Signed authentication message details
+          required: true
+          schema:
+            $ref: '#/definitions/verifySignature'
+      responses:
+        200:
+          description: Signature verified successfully
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: true
+        400:
+          description: Nonce was not found or has expired
+          schema:
+            $ref: '#/definitions/authError'
+        401:
+          description: Signature is invalid
+          schema:
+            $ref: '#/definitions/authError'
+  /auth/logout:
+    post:
+      tags:
+        - Auth
+      summary: Logs out the authenticated user
+      produces:
+        - application/json
+      responses:
+        200:
+          description: Session destroyed successfully
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: true
+definitions:
+  verifySignature:
+    type: object
+    required:
+      - address
+      - message
+      - signature
+    properties:
+      address:
+        type: string
+      message:
+        type: string
+      signature:
+        type: string
+  authError:
+    type: object
+    properties:
+      success:
+        type: boolean
+        example: false
+      error:
+        type: string

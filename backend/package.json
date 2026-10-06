@@ -1,0 +1,49 @@
+{
+  "name": "starter-template",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "bun dist/server.js",
+    "dev": "bun --watch src/server.ts",
+    "cpm": "pm2 start src/server.ts --interpreter bun --watch",
+    "test": "bun test",
+    "lint": "tslint -p tsconfig.json -c tslint.json",
+    "build": "tsc -p .",
+    "production": "bun dist/server.js"
+  },
+  "dependencies": {
+    "connect-mongo": "^6.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.5",
+    "envalid": "^8.2.0",
+    "express": "^5.2.1",
+    "express-session": "^1.19.0",
+    "express-validator": "^7.3.2",
+    "helmet": "^8.3.0",
+    "hpp": "^0.2.3",
+    "mongoose": "^9.10.3",
+    "morgan": "^1.12.1",
+    "siwe": "^3.0.0",
+    "swagger-jsdoc": "^6.3.0",
+    "swagger-ui-express": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/express-session": "^1.19.0",
+    "@types/helmet": "^4.0.0",
+    "@types/hpp": "^0.2.7",
+    "@types/mongoose": "^5.11.97",
+    "@types/morgan": "^1.9.10",
+    "@types/node": "^26.6.4",
+    "@types/supertest": "^7.2.1",
+    "@types/swagger-jsdoc": "^6.0.4",
+    "@types/swagger-ui-express": "^4.1.8",
+    "mongodb-memory-server": "^11.3.0",
+    "supertest": "^7.3.0",
+    "typescript": "^7.0.2"
+  },
+  "overrides": {
+    "ethers": "^5.7.2"
+  }
+}
