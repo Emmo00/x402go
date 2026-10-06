@@ -64,10 +64,10 @@ paths:
         **This endpoint records an address and nothing else.** It does not
         verify a signature and it does not touch the chain. Moving a payout
         on-chain goes through `X402Vault.changePayout`, which requires an
-        EIP-712 `ChangePayout(address newPayout,uint256 nonce)` signature from
-        the vault's merchant. Until this endpoint is wired to the vault, the
-        stored value is a preference rather than an authority, and nothing that
-        moves value should treat it as one.
+        EIP-712 `ChangePayout(address newPayout,uint256 nonce,uint256 deadline)`
+        signature from the vault's merchant. Until this endpoint is wired to the
+        vault, the stored value is a preference rather than an authority, and
+        nothing that moves value should treat it as one.
       consumes:
         - application/json
       produces:

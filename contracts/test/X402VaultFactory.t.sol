@@ -3,16 +3,15 @@ pragma solidity ^0.8.24;
 
 import {Ownable} from "solady/auth/Ownable.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
+import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {X402Base} from "./utils/X402Base.sol";
 import {X402Vault} from "../src/X402Vault.sol";
 import {X402VaultFactory} from "../src/X402VaultFactory.sol";
+import {MockERC20, NoReturnToken, RevertingToken} from "./utils/Mocks.sol";
 
 contract X402VaultFactoryTest is X402Base {
-    event VaultCreated(
-        address indexed merchant,
-        address indexed vault,
-        address payout
-    );
+    event VaultCreated(address indexed merchant, address indexed vault, address payout);
+    event OperatorChanged(address indexed previousOperator, address indexed newOperator);
 
     address internal payoutAddr;
 
@@ -23,19 +22,33 @@ contract X402VaultFactoryTest is X402Base {
 
     // ============================================================ constructor
 
-    function test_constructor_setsOwnerAndImplementation() public view {
+    function test_constructor_setsOwnerOperatorAndImplementation() public view {
         assertEq(factory.owner(), owner);
         assertEq(factory.operator(), operator);
         assertGt(factory.implementation().code.length, 0);
     }
 
-    function test_constructor_operatorStartsUnset() public {
-        X402VaultFactory f = new X402VaultFactory(owner);
+    function test_constructor_operatorIsSetOnDeploy() public {
+        // The operator is the x402Go server wallet and must be usable immediately: it is an
+        // argument to the constructor, not a separate post-deploy setup step.
+        X402VaultFactory f = new X402VaultFactory(owner, stranger);
+        assertEq(f.operator(), stranger);
+        vm.prank(stranger);
+        f.createVault(merchant, merchant);
+    }
+
+    function test_constructor_zeroOperatorIsAcceptedButDisablesOperatorActions() public {
+        // Documents behaviour: the constructor does not validate, so a zero operator produces a
+        // factory whose vaults nobody can withdraw from until the owner repairs it.
+        X402VaultFactory f = new X402VaultFactory(owner, address(0));
         assertEq(f.operator(), address(0));
+        vm.prank(stranger);
+        vm.expectRevert(Ownable.Unauthorized.selector);
+        f.createVault(merchant, merchant);
     }
 
     function test_constructor_eachFactoryGetsItsOwnImplementation() public {
-        X402VaultFactory f = new X402VaultFactory(owner);
+        X402VaultFactory f = new X402VaultFactory(owner, operator);
         assertTrue(f.implementation() != factory.implementation());
     }
 
@@ -51,7 +64,7 @@ contract X402VaultFactoryTest is X402Base {
 
     function test_constructor_zeroOwnerIsAcceptedAndLocksOperator() public {
         // Documents behaviour: Solady's _initializeOwner does not reject address(0).
-        X402VaultFactory f = new X402VaultFactory(address(0));
+        X402VaultFactory f = new X402VaultFactory(address(0), operator);
         assertEq(f.owner(), address(0));
         vm.expectRevert(Ownable.Unauthorized.selector);
         f.setOperator(operator);
@@ -65,11 +78,7 @@ contract X402VaultFactoryTest is X402Base {
 
         vm.expectEmit(true, true, false, true, address(factory));
         emit VaultCreated(merchant, predicted, merchant);
-        vm.expectCall(
-            predicted,
-            abi.encodeWithSelector(X402Vault.initPayout.selector),
-            0
-        );
+        vm.expectCall(predicted, abi.encodeWithSelector(X402Vault.initPayout.selector), 0);
 
         vm.prank(merchant);
         address vault = factory.createVault(merchant, merchant);
@@ -88,11 +97,7 @@ contract X402VaultFactoryTest is X402Base {
 
         vm.expectEmit(true, true, false, true, address(factory));
         emit VaultCreated(merchant, predicted, payoutAddr);
-        vm.expectCall(
-            predicted,
-            abi.encodeCall(X402Vault.initPayout, (payoutAddr)),
-            1
-        );
+        vm.expectCall(predicted, abi.encodeCall(X402Vault.initPayout, (payoutAddr)), 1);
 
         vm.prank(merchant);
         address vault = factory.createVault(merchant, payoutAddr);
@@ -101,10 +106,17 @@ contract X402VaultFactoryTest is X402Base {
         assertEq(X402Vault(vault).merchant(), merchant);
         assertEq(X402Vault(vault).payout(), payoutAddr);
         assertEq(X402Vault(vault).nonce(), 0);
-        assertEq(
-            vm.load(vault, bytes32(0)),
-            bytes32(uint256(uint160(payoutAddr)))
-        );
+        assertEq(vm.load(vault, bytes32(0)), bytes32(uint256(uint160(payoutAddr))));
+    }
+
+    function test_createVault_payoutIsSetExactlyOnce() public {
+        address vault = _deploy(merchant, payoutAddr);
+        // The vault's one-shot initialiser is already spent after creation, so neither the
+        // factory nor anyone else can move the payout behind the merchant's back.
+        vm.prank(address(factory));
+        vm.expectRevert(X402Vault.AlreadyInitialized.selector);
+        X402Vault(vault).initPayout(stranger);
+        assertEq(X402Vault(vault).payout(), payoutAddr);
     }
 
     function test_createVault_byOperatorOnBehalfOfMerchant() public {
@@ -137,7 +149,7 @@ contract X402VaultFactoryTest is X402Base {
     }
 
     function test_createVault_sameMerchantOnDifferentFactoriesDiffers() public {
-        X402VaultFactory f2 = new X402VaultFactory(owner);
+        X402VaultFactory f2 = new X402VaultFactory(owner, operator);
         assertTrue(f2.vaultOf(merchant) != factory.vaultOf(merchant));
     }
 
@@ -216,9 +228,7 @@ contract X402VaultFactoryTest is X402Base {
         factory.createVault(merchant, payoutAddr);
     }
 
-    function test_createVault_duplicateAfterOperatorRotationStillReverts()
-        public
-    {
+    function test_createVault_duplicateAfterOperatorRotationStillReverts() public {
         _deploy(merchant, merchant);
         vm.prank(owner);
         factory.setOperator(stranger);
@@ -247,16 +257,41 @@ contract X402VaultFactoryTest is X402Base {
 
     // ============================================================ setOperator
 
-    function test_setOperator_ownerCanSet() public {
+    function test_setOperator_ownerCanRotate() public {
+        address newOp = makeAddr("newOp");
         vm.prank(owner);
-        factory.setOperator(stranger);
-        assertEq(factory.operator(), stranger);
+        factory.setOperator(newOp);
+        assertEq(factory.operator(), newOp);
     }
 
-    function test_setOperator_canBeCleared() public {
+    function test_setOperator_emitsOperatorChanged() public {
+        address newOp = makeAddr("newOp");
+        vm.expectEmit(true, true, false, true, address(factory));
+        emit OperatorChanged(operator, newOp);
         vm.prank(owner);
+        factory.setOperator(newOp);
+    }
+
+    function test_setOperator_emitsPreviousOperatorNotTheNewOneTwice() public {
+        address a = makeAddr("opA");
+        address b = makeAddr("opB");
+        vm.startPrank(owner);
+        factory.setOperator(a);
+
+        vm.expectEmit(true, true, false, true, address(factory));
+        emit OperatorChanged(a, b);
+        factory.setOperator(b);
+        vm.stopPrank();
+        assertEq(factory.operator(), b);
+    }
+
+    function test_setOperator_rejectsZeroAddress() public {
+        // Rotation is also the key-loss recovery path, so it must not be possible to
+        // "recover" into a state where no one can withdraw.
+        vm.prank(owner);
+        vm.expectRevert(X402VaultFactory.InvalidAddress.selector);
         factory.setOperator(address(0));
-        assertEq(factory.operator(), address(0));
+        assertEq(factory.operator(), operator);
     }
 
     function test_setOperator_revertsForNonOwner() public {
@@ -271,12 +306,24 @@ contract X402VaultFactoryTest is X402Base {
         factory.setOperator(stranger);
     }
 
-    function test_setOperator_firstTimeSetWorksFromUnset() public {
-        // Regression: the original contract required msg.sender == operator, bricking this.
-        X402VaultFactory f = new X402VaultFactory(owner);
+    function test_setOperator_oldOperatorLosesAndNewOperatorGainsRights() public {
+        address newOp = makeAddr("newOp");
         vm.prank(owner);
-        f.setOperator(operator);
-        assertEq(f.operator(), operator);
+        factory.setOperator(newOp);
+
+        vm.prank(operator);
+        vm.expectRevert(Ownable.Unauthorized.selector);
+        factory.createVault(merchant, merchant);
+
+        vm.prank(newOp);
+        address vault = factory.createVault(merchant, merchant);
+        assertEq(X402Vault(vault).merchant(), merchant);
+    }
+
+    function test_setOperator_rotatingToSameOperatorIsAllowed() public {
+        vm.prank(owner);
+        factory.setOperator(operator);
+        assertEq(factory.operator(), operator);
     }
 
     function test_setOperator_rotationMovesCreateRights() public {
@@ -292,12 +339,124 @@ contract X402VaultFactoryTest is X402Base {
         factory.createVault(merchant, merchant);
     }
 
-    function test_setOperator_unsetOperatorMeansStrangersStillBlocked() public {
+    // ============================================================ withdrawFees
+
+    function test_withdrawFees_onlyOwner() public {
+        token.mint(address(factory), 100);
+        address[3] memory callers = [stranger, operator, merchant];
+        for (uint256 i; i < callers.length; ++i) {
+            vm.prank(callers[i]);
+            vm.expectRevert(Ownable.Unauthorized.selector);
+            factory.withdrawFees(_arr(address(token)), feeRecipient);
+        }
+        assertEq(token.balanceOf(address(factory)), 100);
+    }
+
+    function test_withdrawFees_rejectsZeroRecipient() public {
+        token.mint(address(factory), 100);
         vm.prank(owner);
-        factory.setOperator(address(0));
+        vm.expectRevert(X402VaultFactory.InvalidAddress.selector);
+        factory.withdrawFees(_arr(address(token)), address(0));
+        assertEq(token.balanceOf(address(factory)), 100);
+    }
+
+    function test_withdrawFees_sendsFullBalanceToRecipient() public {
+        token.mint(address(factory), 100);
+        vm.prank(owner);
+        factory.withdrawFees(_arr(address(token)), feeRecipient);
+        assertEq(token.balanceOf(feeRecipient), 100);
+        assertEq(token.balanceOf(address(factory)), 0);
+    }
+
+    function test_withdrawFees_multiToken() public {
+        MockERC20 t2 = new MockERC20();
+        NoReturnToken t3 = new NoReturnToken();
+        token.mint(address(factory), 10);
+        t2.mint(address(factory), 20);
+        t3.mint(address(factory), 30);
+
+        address[] memory t = new address[](3);
+        t[0] = address(token);
+        t[1] = address(t2);
+        t[2] = address(t3);
+
+        vm.prank(owner);
+        factory.withdrawFees(t, feeRecipient);
+
+        assertEq(token.balanceOf(feeRecipient), 10);
+        assertEq(t2.balanceOf(feeRecipient), 20);
+        assertEq(t3.balanceOf(feeRecipient), 30);
+        assertEq(token.balanceOf(address(factory)), 0);
+    }
+
+    function test_withdrawFees_canBeCalledRepeatedly() public {
+        token.mint(address(factory), 40);
+        vm.startPrank(owner);
+        factory.withdrawFees(_arr(address(token)), feeRecipient);
+        factory.withdrawFees(_arr(address(token)), feeRecipient); // nothing left, still no revert
+        vm.stopPrank();
+        assertEq(token.balanceOf(feeRecipient), 40);
+    }
+
+    function test_withdrawFees_emptyListIsNoOp() public {
+        token.mint(address(factory), 5);
+        vm.prank(owner);
+        factory.withdrawFees(new address[](0), feeRecipient);
+        assertEq(token.balanceOf(address(factory)), 5);
+    }
+
+    function test_withdrawFees_revertingTokenRevertsTheWholeCall() public {
+        token.mint(address(factory), 10);
+        address[] memory t = new address[](2);
+        t[0] = address(token);
+        t[1] = address(new RevertingToken());
+
+        vm.prank(owner);
+        vm.expectRevert(SafeTransferLib.TransferFailed.selector);
+        factory.withdrawFees(t, feeRecipient);
+        assertEq(token.balanceOf(address(factory)), 10, "first leg rolled back");
+    }
+
+    function test_withdrawFees_onlyTouchesListedTokens() public {
+        MockERC20 other = new MockERC20();
+        token.mint(address(factory), 10);
+        other.mint(address(factory), 99);
+
+        vm.prank(owner);
+        factory.withdrawFees(_arr(address(token)), feeRecipient);
+
+        assertEq(other.balanceOf(address(factory)), 99);
+        assertEq(other.balanceOf(feeRecipient), 0);
+    }
+
+    function test_withdrawFees_thenRotationDoesNotAffectPastFees() public {
+        // The owner controls both the fee sink and the operator; neither can be reached by the
+        // other. Rotating the operator must not move already-collected fees.
+        token.mint(address(factory), 30);
+        vm.prank(owner);
+        factory.setOperator(stranger);
+        assertEq(token.balanceOf(address(factory)), 30);
+
         vm.prank(stranger);
         vm.expectRevert(Ownable.Unauthorized.selector);
-        factory.createVault(merchant, merchant);
+        factory.withdrawFees(_arr(address(token)), feeRecipient);
+    }
+
+    // ---- fees land in the factory as a direct result of a vault withdrawal
+
+    function test_withdrawFees_sweepsFeesProducedByVaultWithdrawals() public {
+        address vault = _deploy(merchant, merchant);
+        token.mint(vault, 100);
+
+        vm.prank(operator);
+        X402Vault(vault).withdraw(_arr(address(token)), _arr(uint256(90)), _arr(uint256(10)));
+        assertEq(token.balanceOf(address(factory)), 10, "vault routed the fee leg to the factory");
+
+        vm.prank(owner);
+        factory.withdrawFees(_arr(address(token)), feeRecipient);
+        assertEq(token.balanceOf(feeRecipient), 10);
+        assertEq(token.balanceOf(address(factory)), 0);
+        assertEq(token.balanceOf(merchant), 90, "merchant funds untouched by the fee sweep");
     }
 
     // ============================================================ ownership (Solady Ownable)
@@ -335,7 +494,7 @@ contract X402VaultFactoryTest is X402Base {
         factory.completeOwnershipHandover(stranger);
     }
 
-    function test_ownership_renounceBricksSetOperatorButKeepsOperator() public {
+    function test_ownership_renounceBricksOwnerActionsButKeepsOperator() public {
         vm.prank(owner);
         factory.renounceOwnership();
         assertEq(factory.owner(), address(0));
@@ -343,6 +502,10 @@ contract X402VaultFactoryTest is X402Base {
         vm.prank(owner);
         vm.expectRevert(Ownable.Unauthorized.selector);
         factory.setOperator(stranger);
+
+        vm.prank(owner);
+        vm.expectRevert(Ownable.Unauthorized.selector);
+        factory.withdrawFees(_arr(address(token)), feeRecipient);
 
         // existing operator keeps working
         vm.prank(operator);
@@ -382,11 +545,7 @@ contract X402VaultFactoryTest is X402Base {
         assertEq(X402Vault(vault).payout(), p);
     }
 
-    function testFuzz_createVault_unauthorizedCaller(
-        address caller,
-        address m,
-        address p
-    ) public {
+    function testFuzz_createVault_unauthorizedCaller(address caller, address m, address p) public {
         vm.assume(m != address(0) && p != address(0));
         vm.assume(caller != m && caller != operator);
         address predicted = factory.vaultOf(m);
@@ -397,11 +556,7 @@ contract X402VaultFactoryTest is X402Base {
         assertEq(predicted.code.length, 0);
     }
 
-    function testFuzz_createVault_addressIndependentOfPayout(
-        address m,
-        address p1,
-        address p2
-    ) public {
+    function testFuzz_createVault_addressIndependentOfPayout(address m, address p1, address p2) public {
         vm.assume(m != address(0) && p1 != address(0) && p2 != address(0));
         address predicted = factory.vaultOf(m);
         address vault = _deploy(m, p1);
@@ -412,10 +567,7 @@ contract X402VaultFactoryTest is X402Base {
         factory.createVault(m, p2);
     }
 
-    function testFuzz_createVault_distinctMerchantsDistinctVaults(
-        address a,
-        address b
-    ) public {
+    function testFuzz_createVault_distinctMerchantsDistinctVaults(address a, address b) public {
         vm.assume(a != address(0) && b != address(0) && a != b);
         address va = _deploy(a, a);
         address vb = _deploy(b, b);
@@ -426,19 +578,14 @@ contract X402VaultFactoryTest is X402Base {
 
     function testFuzz_vaultOf_matchesLibClonePrediction(address m) public view {
         address expected = LibClone.predictDeterministicAddress(
-            factory.implementation(),
-            abi.encodePacked(m),
-            bytes32(uint256(uint160(m))),
-            address(factory)
+            factory.implementation(), abi.encodePacked(m), bytes32(uint256(uint160(m))), address(factory)
         );
         assertEq(factory.vaultOf(m), expected);
     }
 
-    function testFuzz_setOperator_onlyOwner(
-        address caller,
-        address newOp
-    ) public {
+    function testFuzz_setOperator_onlyOwner(address caller, address newOp) public {
         vm.assume(caller != owner);
+        vm.assume(newOp != address(0));
         vm.prank(caller);
         vm.expectRevert(Ownable.Unauthorized.selector);
         factory.setOperator(newOp);
@@ -449,10 +596,18 @@ contract X402VaultFactoryTest is X402Base {
         assertEq(factory.operator(), newOp);
     }
 
-    function testFuzz_operatorRotation_newOperatorGainsAndOldLosesRights(
-        address newOp,
-        address m
-    ) public {
+    function testFuzz_setOperator_zeroAlwaysRejected(address caller) public {
+        vm.prank(caller);
+        if (caller != owner) {
+            vm.expectRevert(Ownable.Unauthorized.selector);
+        } else {
+            vm.expectRevert(X402VaultFactory.InvalidAddress.selector);
+        }
+        factory.setOperator(address(0));
+        assertEq(factory.operator(), operator);
+    }
+
+    function testFuzz_setOperator_rotationMovesRights(address newOp, address m) public {
         vm.assume(newOp != address(0) && newOp != operator && newOp != m);
         vm.assume(m != address(0) && m != operator);
 
@@ -466,5 +621,27 @@ contract X402VaultFactoryTest is X402Base {
         vm.prank(newOp);
         address vault = factory.createVault(m, m);
         assertEq(X402Vault(vault).merchant(), m);
+    }
+
+    function testFuzz_withdrawFees_onlyOwnerCanSweep(address caller, uint128 amount) public {
+        token.mint(address(factory), amount);
+        vm.assume(caller != owner);
+
+        vm.prank(caller);
+        vm.expectRevert(Ownable.Unauthorized.selector);
+        factory.withdrawFees(_arr(address(token)), feeRecipient);
+        assertEq(token.balanceOf(address(factory)), amount);
+
+        vm.prank(owner);
+        factory.withdrawFees(_arr(address(token)), feeRecipient);
+        assertEq(token.balanceOf(feeRecipient), amount);
+    }
+
+    function testFuzz_withdrawFees_fullBalanceNeverPartial(uint128 amount) public {
+        token.mint(address(factory), amount);
+        vm.prank(owner);
+        factory.withdrawFees(_arr(address(token)), feeRecipient);
+        assertEq(token.balanceOf(feeRecipient), amount);
+        assertEq(token.balanceOf(address(factory)), 0);
     }
 }

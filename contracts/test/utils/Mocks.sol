@@ -59,15 +59,12 @@ contract ReentrantToken is MockERC20 {
         target = t;
     }
 
-    function transfer(
-        address to,
-        uint256 amount
-    ) public override returns (bool) {
+    function transfer(address to, uint256 amount) public override returns (bool) {
         if (target != address(0)) {
             address[] memory t = new address[](0);
             uint256[] memory a = new uint256[](0);
             // msg.sender is this token, which is not the operator -> reverts Unauthorized
-            X402Vault(target).withdrawAll(t, a, a, address(0xFEE));
+            X402Vault(target).withdraw(t, a, a);
         }
         return super.transfer(to, amount);
     }
@@ -86,20 +83,14 @@ contract Mock1271Wallet {
         magic = m;
     }
 
-    function isValidSignature(
-        bytes32 hash,
-        bytes calldata
-    ) external view returns (bytes4) {
+    function isValidSignature(bytes32 hash, bytes calldata) external view returns (bytes4) {
         return hash == approvedHash ? magic : bytes4(0xffffffff);
     }
 }
 
 /// @dev ERC-1271 wallet whose validation always reverts.
 contract Reverting1271Wallet {
-    function isValidSignature(
-        bytes32,
-        bytes calldata
-    ) external pure returns (bytes4) {
+    function isValidSignature(bytes32, bytes calldata) external pure returns (bytes4) {
         revert("boom");
     }
 }

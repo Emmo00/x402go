@@ -19,10 +19,10 @@ export type IPayoutOutcome =
  *
  * NOTE: this records an address and nothing else. On chain, moving a payout
  * goes through `X402Vault.changePayout`, which verifies an EIP-712
- * `ChangePayout(address newPayout,uint256 nonce)` signature from the vault's
- * merchant before any funds follow it. That check does not exist yet, so what
- * is stored here is a preference, not an authority, and nothing that moves
- * value may treat it as one until the vault is wired up.
+ * `ChangePayout(address newPayout,uint256 nonce,uint256 deadline)` signature
+ * from the vault's merchant before any funds follow it. That check does not
+ * exist yet, so what is stored here is a preference, not an authority, and
+ * nothing that moves value may treat it as one until the vault is wired up.
  */
 class PayoutService {
   private users = userModel;

@@ -7,10 +7,12 @@ import {X402VaultFactory} from "../src/X402VaultFactory.sol";
 /// @notice Deploys X402VaultFactory (which deploys the X402Vault implementation in its constructor).
 ///
 /// Env vars (all optional):
-///   OWNER     - factory owner. Defaults to the broadcaster.
-///   OPERATOR  - address allowed to call createVault on behalf of merchants.
-///               Only set in this script if the broadcaster is also the owner;
-///               otherwise call setOperator from the owner afterwards.
+///   OWNER     - factory owner (fee withdrawal + operator rotation). Defaults to the broadcaster.
+///   OPERATOR  - the x402Go server wallet: creates vaults on merchants' behalf and is the only
+///               caller of `X402Vault.withdraw`. Set here, in the constructor. Defaults to
+///               address(0), which leaves every vault unwithdrawable until the owner calls
+///               setOperator - so set it explicitly in any real deployment.
+///   PRIVATE_KEY - broadcast key.
 ///
 /// Usage:
 ///   forge script script/DeployX402VaultFactory.s.sol:DeployX402VaultFactory \
@@ -22,19 +24,11 @@ contract DeployX402VaultFactory is Script {
         vm.startBroadcast(privateKey);
 
         (, address deployer,) = vm.readCallers();
-        
+
         address owner = vm.envOr("OWNER", deployer);
         address operator = vm.envOr("OPERATOR", address(0));
 
-        factory = new X402VaultFactory(owner);
-
-        if (operator != address(0)) {
-            if (owner == deployer) {
-                factory.setOperator(operator);
-            } else {
-                console2.log("OPERATOR not set: broadcaster is not the owner. Call setOperator from the owner.");
-            }
-        }
+        factory = new X402VaultFactory(owner, operator);
 
         vm.stopBroadcast();
 
