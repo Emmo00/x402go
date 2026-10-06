@@ -1,0 +1,158 @@
+paths:
+  /api-keys:
+    post:
+      tags:
+        - API Keys
+      summary: Issues the account's first API key
+      description: >
+        Creates the single API key the authenticated account is allowed to hold.
+        The plaintext key is returned in this response and **only** in this
+        response — the server stores a one-way hash, so the key can never be
+        retrieved again. A caller that loses it must rotate.
+
+
+        The account is taken from the authenticated session; there is no user
+        identifier in the request body, so one account cannot issue a key for
+        another. Because an account may hold exactly one key, calling this a
+        second time is a conflict rather than a replacement: use
+        `POST /api-keys/rotate` to issue a new key.
+
+
+        Evaluation of "this account has no key yet" and the write that creates
+        one are a single atomic database operation, so two concurrent requests
+        cannot both succeed.
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      security:
+        - sessionCookie: []
+      responses:
+        201:
+          description: >
+            API key created. This is the only time the plaintext key is
+            returned; it is not recoverable afterwards.
+          schema:
+            $ref: '#/definitions/apiKeyIssued'
+        401:
+          description: No authenticated session.
+          schema:
+            $ref: '#/definitions/apiKeyError'
+        409:
+          description: >
+            The account already has an API key. Only one may be active, so the
+            existing key must be rotated instead.
+          schema:
+            $ref: '#/definitions/apiKeyError'
+          examples:
+            application/json:
+              message: This account already has an API key. Rotate it to issue a new one.
+        500:
+          description: Unexpected server error.
+          schema:
+            $ref: '#/definitions/apiKeyError'
+  /api-keys/rotate:
+    post:
+      tags:
+        - API Keys
+      summary: Replaces the account's API key
+      description: >
+        Issues a new API key for the authenticated account and invalidates the
+        previous one. The new plaintext key is returned in this response and
+        **only** in this response.
+
+
+        The old hash is overwritten by the same write that stores the new one,
+        so the previous key stops authenticating the moment this call succeeds.
+        There is no overlap in which both keys are accepted, no grace period,
+        and no way to recover the previous key — it is never returned and never
+        retained as a secondary credential. A client still using it receives
+        401.
+
+
+        The account is taken from the authenticated session, as with
+        `POST /api-keys`.
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      security:
+        - sessionCookie: []
+      responses:
+        200:
+          description: >
+            API key rotated. This is the only time the new plaintext key is
+            returned; the previous key is no longer valid.
+          schema:
+            $ref: '#/definitions/apiKeyIssued'
+        401:
+          description: >
+            No authenticated session, or the session no longer resolves to an
+            account (the account was deleted after the session was issued).
+          schema:
+            $ref: '#/definitions/apiKeyError'
+        404:
+          description: >
+            The authenticated account no longer exists. Normally surfaced as
+            `401` by the session middleware; this is the branch taken if the
+            account is removed between authentication and the rotation itself.
+          schema:
+            $ref: '#/definitions/apiKeyError'
+          examples:
+            application/json:
+              message: Account not found
+        409:
+          description: >
+            The account does not have an API key yet, so there is nothing to
+            rotate. Create one with `POST /api-keys` first.
+          schema:
+            $ref: '#/definitions/apiKeyError'
+          examples:
+            application/json:
+              message: This account does not have an API key yet. Create one first.
+        500:
+          description: Unexpected server error.
+          schema:
+            $ref: '#/definitions/apiKeyError'
+definitions:
+  apiKeyIssued:
+    type: object
+    description: >
+      The newly issued key. Only `apiKey` is confidential, and only until this
+      response has been read — it is not stored and cannot be reissued. The
+      other fields describe the key and remain safe to display.
+    properties:
+      apiKey:
+        type: string
+        description: >
+          The plaintext API key, prefixed with `x402go_`. Returned exactly once,
+          here. Store it as a secret; it cannot be retrieved again.
+        example: x402go_K7fQ2mZ0pLxVbN4tRwYcHs8dJgAeUiOn3qB6vXzM1kP
+      suffix:
+        type: string
+        description: >
+          The last four characters of the key, kept in the clear so the key can
+          be recognised later. Not a secret and not usable to authenticate.
+        example: a91f
+      maskedKey:
+        type: string
+        description: Display form of the key, safe to show in a UI.
+        example: ••••••••••••a91f
+      createdAt:
+        type: string
+        format: date-time
+        description: When this key was issued.
+        example: '2026-10-05T09:41:07.412Z'
+      rotatedAt:
+        type: string
+        format: date-time
+        description: >
+          When this key replaced a previous one. Present only on a response from
+          `POST /api-keys/rotate`; absent when the key was created.
+        example: '2026-10-05T09:41:07.412Z'
+  apiKeyError:
+    type: object
+    properties:
+      message:
+        type: string
+        example: Authentication required

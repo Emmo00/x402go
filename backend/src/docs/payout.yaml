@@ -1,0 +1,146 @@
+paths:
+  /payout:
+    get:
+      tags:
+        - Payout
+      summary: Reads the account's payout address
+      description: >
+        Returns the address the authenticated account's settled x402 payments
+        are sent to.
+
+
+        `payTo` is `null` when the account has not set one yet. That is a normal
+        onboarding state, not a missing resource, so it is reported as a `null`
+        field on a `200` rather than a `404` — the dashboard drives the first
+        step of its flow off exactly this value.
+
+
+        The account is taken from the authenticated session, so one account can
+        never read another's payout address.
+      produces:
+        - application/json
+      security:
+        - sessionCookie: []
+      responses:
+        200:
+          description: >
+            The payout address, or `null` if the account has not set one.
+          schema:
+            $ref: '#/definitions/payoutAddress'
+        401:
+          description: No authenticated session.
+          schema:
+            $ref: '#/definitions/payoutError'
+        404:
+          description: >
+            The authenticated account no longer exists. Normally surfaced as
+            `401` by the session middleware; this is the branch taken if the
+            account is removed between authentication and the read.
+          schema:
+            $ref: '#/definitions/payoutError'
+          examples:
+            application/json:
+              message: Account not found
+        500:
+          description: Unexpected server error.
+          schema:
+            $ref: '#/definitions/payoutError'
+    put:
+      tags:
+        - Payout
+      summary: Sets or replaces the account's payout address
+      description: >
+        Records the address the authenticated account's settled x402 payments
+        are sent to. Sending an address that is already set is a no-op, so the
+        operation is idempotent and this is a `PUT` on a single-value resource
+        rather than a `POST`.
+
+
+        The account is taken from the authenticated session; there is no user
+        identifier in the request body, so one account cannot set a payout
+        address on another.
+
+
+        **This endpoint records an address and nothing else.** It does not
+        verify a signature and it does not touch the chain. Moving a payout
+        on-chain goes through `X402Vault.changePayout`, which requires an
+        EIP-712 `ChangePayout(address newPayout,uint256 nonce)` signature from
+        the vault's merchant. Until this endpoint is wired to the vault, the
+        stored value is a preference rather than an authority, and nothing that
+        moves value should treat it as one.
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - in: body
+          name: payout
+          description: The address to settle to.
+          required: true
+          schema:
+            $ref: '#/definitions/setPayoutRequest'
+      security:
+        - sessionCookie: []
+      responses:
+        200:
+          description: The payout address now on record, lowercased.
+          schema:
+            $ref: '#/definitions/payoutAddress'
+        400:
+          description: >
+            `payTo` is missing, is not a `0x`-prefixed 20-byte address, or is
+            the zero address.
+          schema:
+            $ref: '#/definitions/payoutError'
+          examples:
+            application/json:
+              message: >-
+                payTo must be a 0x-prefixed 20-byte address and must not be the
+                zero address
+        401:
+          description: No authenticated session.
+          schema:
+            $ref: '#/definitions/payoutError'
+        404:
+          description: >
+            The authenticated account no longer exists.
+          schema:
+            $ref: '#/definitions/payoutError'
+          examples:
+            application/json:
+              message: Account not found
+        500:
+          description: Unexpected server error.
+          schema:
+            $ref: '#/definitions/payoutError'
+definitions:
+  payoutAddress:
+    type: object
+    description: >
+      The account's payout address, or `null` when none has been set.
+    properties:
+      payTo:
+        type: string
+        description: >
+          The address settlements are sent to, lowercased. `null` until the
+          account sets one.
+        example: '0x4f3edf983ac636a65a842ce7c78d9aa706d3b113'
+        x-nullable: true
+  setPayoutRequest:
+    type: object
+    required:
+      - payTo
+    properties:
+      payTo:
+        type: string
+        description: >
+          A `0x`-prefixed 20-byte EVM address. Case is not significant — the
+          value is stored lowercased — but the zero address is refused, since
+          transfers to it are burned and `X402Vault.changePayout` rejects it.
+        example: '0x4f3Edf983aC636A65A842Ce7c78D9Aa706D3b113'
+  payoutError:
+    type: object
+    properties:
+      message:
+        type: string
+        example: Authentication required
