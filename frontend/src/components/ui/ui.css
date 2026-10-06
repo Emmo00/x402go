@@ -1,0 +1,540 @@
+/* ==========================================================================
+   x402Go — dashboard primitives
+
+   Shared building blocks for the authenticated dashboard. Every value comes
+   from DESIGN.md: flat surfaces stepped by colour, 1px hairlines instead of
+   drop shadows, 1px radius on everything structural, and monospace only for
+   text a system would say.
+   ========================================================================== */
+
+button.btn {
+  cursor: pointer;
+}
+
+/* Available to assistive tech only — used for copy confirmations, which would
+   otherwise have to change the visible button label. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.btn:disabled,
+.btn[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* Outlined ghost button — secondary action */
+.btn--ghost {
+  padding: 6px 12px;
+  background-color: transparent;
+  border: 1px solid var(--color-silver);
+  color: var(--color-silver);
+}
+
+.btn--ghost:hover:not(:disabled) {
+  border-color: var(--color-bone);
+  color: var(--color-bone);
+}
+
+/* Text link button — tertiary action. SuisseIntl, per the pairing rule that
+   mono is never used for prose. */
+.btn--link {
+  padding: 0;
+  background: none;
+  border: 0;
+  font-family: var(--font-suisseintl);
+  font-feature-settings: var(--font-features-sans);
+  font-size: var(--text-body);
+  letter-spacing: var(--tracking-body);
+  color: var(--color-ash);
+}
+
+.btn--link:hover:not(:disabled) {
+  color: var(--color-bone);
+}
+
+/* ==========================================================================
+   Card
+   ========================================================================== */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-16);
+  padding: var(--card-padding);
+  background-color: var(--surface-carbon);
+  border: 1px solid var(--color-slate-base);
+  border-radius: var(--radius-cards);
+}
+
+.card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-16);
+  flex-wrap: wrap;
+}
+
+.card__heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+
+.card__title {
+  font-size: var(--text-subheading);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--leading-subheading);
+  letter-spacing: var(--tracking-subheading);
+  color: var(--color-bone);
+}
+
+.card__desc {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--color-steel);
+  max-width: 62ch;
+}
+
+.card__action {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  flex-wrap: wrap;
+}
+
+/* ==========================================================================
+   Stat cards — a hairline grid, like the benefits block on the landing page
+   ========================================================================== */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background-color: var(--color-slate-base);
+  border: 1px solid var(--color-slate-base);
+  border-radius: var(--radius-cards);
+  overflow: hidden;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
+  padding: var(--card-padding);
+  background-color: var(--surface-carbon);
+}
+
+.stat__label {
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  letter-spacing: var(--tracking-caption);
+  text-transform: uppercase;
+  color: var(--color-steel);
+}
+
+/* A balance is a number a terminal would print, so it stays monospace. */
+.stat__value {
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: var(--text-subheading);
+  line-height: var(--leading-subheading);
+  color: var(--color-bone);
+}
+
+.stat__value--muted {
+  color: var(--color-steel);
+}
+
+.stat__hint {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--color-steel);
+}
+
+/* ==========================================================================
+   Status badge — the inset ring is the signature, not a pill
+   ========================================================================== */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  padding: 2px 8px;
+  background-color: var(--color-carbon);
+  border-radius: var(--radius-badges);
+  box-shadow: var(--shadow-subtle);
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  letter-spacing: var(--tracking-caption);
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--color-phosphor-green);
+}
+
+.badge--neutral {
+  box-shadow: var(--shadow-subtle-2);
+  color: var(--color-steel);
+}
+
+/* A failed payment is the one piece of bad news a badge carries. Coral, to
+   match the error notices — still a ring and a text colour, never a fill. */
+.badge--error {
+  box-shadow: inset 0 0 0 1px
+    color-mix(in oklab, var(--color-syntax-coral) 22%, transparent);
+  color: var(--color-syntax-coral);
+}
+
+/* ==========================================================================
+   Notice
+   ========================================================================== */
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-12);
+  padding: var(--spacing-16);
+  background-color: var(--surface-graphite);
+  border: 1px solid var(--color-slate-base);
+  border-radius: var(--radius-cards);
+}
+
+.notice__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+
+.notice__title {
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  letter-spacing: 0.058em;
+  text-transform: uppercase;
+  color: var(--color-steel);
+}
+
+.notice__text {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--color-silver);
+}
+
+/* DESIGN.md reserves Diagnostic Magenta for terminal readouts, so an
+   error the user must read is carried by Syntax Coral text instead. */
+.notice--error .notice__title,
+.notice--error .notice__text {
+  color: var(--color-syntax-coral);
+}
+
+/* ==========================================================================
+   State panel — loading, empty, error, and "no endpoint yet" all share it.
+   Left-aligned: the system never centres a composition.
+   ========================================================================== */
+
+.state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-8);
+  padding: var(--spacing-40) var(--card-padding);
+  background-color: var(--surface-carbon);
+  border: 1px solid var(--color-slate-base);
+  border-radius: var(--radius-cards);
+}
+
+.state__label {
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  letter-spacing: var(--tracking-caption);
+  text-transform: uppercase;
+  color: var(--color-steel);
+}
+
+.state__label--busy {
+  color: var(--color-phosphor-green);
+  animation: state-pulse 1.4s ease-in-out infinite;
+}
+
+.state__title {
+  font-size: var(--text-subheading);
+  line-height: var(--leading-subheading);
+  letter-spacing: var(--tracking-subheading);
+  color: var(--color-bone);
+}
+
+.state__text {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--color-steel);
+  max-width: 68ch;
+}
+
+.notice__text code,
+.state__text code {
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: 13px;
+  color: var(--color-silver);
+}
+
+.state--error .state__label,
+.state--error .state__title {
+  color: var(--color-syntax-coral);
+}
+
+.state--error .state__text {
+  color: var(--color-silver);
+}
+
+@keyframes state-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .state__label--busy {
+    animation: none;
+  }
+}
+
+/* ==========================================================================
+   Field
+   ========================================================================== */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
+}
+
+.field__label {
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  letter-spacing: 0.058em;
+  text-transform: uppercase;
+  color: var(--color-steel);
+}
+
+.field__input {
+  width: 100%;
+  padding: 10px 12px;
+  background-color: var(--surface-graphite);
+  border: 1px solid var(--color-slate-base);
+  border-radius: var(--radius-inputs);
+  color: var(--color-bone);
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: 13px;
+  letter-spacing: 0.014em;
+}
+
+.field__input::placeholder {
+  color: var(--color-fog);
+}
+
+.field__input:focus {
+  border-color: var(--color-phosphor-green);
+}
+
+.field__input[aria-invalid='true'] {
+  border-color: var(--color-syntax-coral);
+}
+
+.field__hint,
+.field__error {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.field__hint {
+  color: var(--color-steel);
+}
+
+.field__error {
+  color: var(--color-syntax-coral);
+}
+
+/* ==========================================================================
+   Secret value — one-time display of a generated API key
+   ========================================================================== */
+
+.secret {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-12);
+  padding: var(--spacing-12) var(--spacing-16);
+  background-color: var(--surface-graphite);
+  border: 1px solid var(--color-slate-base);
+  border-radius: var(--radius-inputs);
+  flex-wrap: wrap;
+}
+
+.secret code {
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: 13px;
+  line-height: 1.45;
+  letter-spacing: 0.014em;
+  color: var(--color-bone);
+  word-break: break-all;
+  min-width: 0;
+}
+
+/* ==========================================================================
+   Address
+   ========================================================================== */
+
+.address {
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: 13px;
+  letter-spacing: 0.014em;
+  color: var(--color-silver);
+}
+
+/* ==========================================================================
+   Table
+   ========================================================================== */
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--color-slate-base);
+  border-radius: var(--radius-cards);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background-color: var(--surface-carbon);
+}
+
+.table th {
+  padding: var(--spacing-12);
+  text-align: left;
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  letter-spacing: var(--tracking-caption);
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--color-steel);
+  border-bottom: 1px solid var(--color-slate-base);
+}
+
+.table td {
+  padding: var(--spacing-12);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--color-silver);
+  border-bottom: 1px solid var(--color-slate-base);
+}
+
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.table__numeric {
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: 13px;
+  color: var(--color-bone);
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   Dialog — a modal decision, for actions that cannot be undone by retrying
+   ========================================================================== */
+
+/* The scrim is a darkened canvas, not a shadow: the system never uses drop
+   shadows to separate surfaces, only colour stepping. */
+.dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--spacing-64) var(--spacing-24) var(--spacing-32);
+  overflow-y: auto;
+  background-color: color-mix(in oklab, var(--color-void-black) 72%, transparent);
+}
+
+/* One step up the surface stack from the page, ringed by a hairline. The
+   panel's own content stays left-aligned — nothing in this system centres. */
+.dialog__panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-16);
+  width: 100%;
+  max-width: 460px;
+  padding: var(--card-padding);
+  background-color: var(--surface-graphite);
+  border: 1px solid var(--color-slate-base);
+  border-radius: var(--radius-cards);
+}
+
+/* Focus is moved here on open to keep the dialog in the tab order; the ring
+   would draw a box around the whole panel, so it is suppressed. */
+.dialog__panel:focus {
+  outline: none;
+}
+
+.dialog__title {
+  font-size: var(--text-subheading);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--leading-subheading);
+  letter-spacing: var(--tracking-subheading);
+  color: var(--color-bone);
+}
+
+.dialog__text {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--color-silver);
+  max-width: 62ch;
+}
+
+.dialog__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-12);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 639px) {
+  .dialog {
+    padding: var(--spacing-24) var(--spacing-16);
+  }
+
+  .dialog__actions .btn {
+    flex: 1 1 auto;
+  }
+}

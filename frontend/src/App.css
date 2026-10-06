@@ -1,0 +1,308 @@
+/* ==========================================================================
+   x402Go — landing page
+   Components follow DESIGN.md: flat surfaces stepped by colour, 1px hairlines
+   instead of shadows, left-aligned type, and 1px radius on every element.
+   ========================================================================== */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background-color: var(--surface-void);
+}
+
+/* ==========================================================================
+   Filled primary button — the only chromatic fill in the interface
+   ========================================================================== */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: 12px;
+  font-weight: var(--font-weight-regular);
+  letter-spacing: 0.053em;
+  line-height: 1.2;
+  text-decoration: none;
+  border-radius: var(--radius-buttons);
+  transition: background-color 120ms ease, border-color 120ms ease,
+    color 120ms ease;
+}
+
+.btn--primary {
+  padding: 6px 12px;
+  background-color: var(--color-deep-teal);
+  border: 1px solid var(--color-deep-teal);
+  color: var(--color-phosphor-green);
+}
+
+.btn--primary:hover {
+  background-color: var(--color-emerald-depth);
+  border-color: var(--color-emerald-depth);
+}
+
+/* ==========================================================================
+   Logo mark — the one place the wordmark carries Phosphor Green
+   ========================================================================== */
+
+.logo {
+  display: inline-flex;
+  align-items: baseline;
+  font-family: var(--font-suisseintl);
+  font-feature-settings: var(--font-features-sans);
+  font-size: var(--text-subheading);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--leading-subheading);
+  color: var(--color-bone);
+}
+
+.logo__accent {
+  color: var(--color-phosphor-green);
+}
+
+/* ==========================================================================
+   Header — sits directly on the page canvas, no fill, no sticky behaviour
+   ========================================================================== */
+
+.site-header {
+  padding-block: var(--spacing-24);
+}
+
+.site-header__inner {
+  display: flex;
+  align-items: center;
+}
+
+/* ==========================================================================
+   Hero
+   ========================================================================== */
+
+.hero {
+  position: relative;
+  overflow: hidden;
+  padding-block: var(--spacing-128) var(--spacing-80);
+}
+
+/* The only gradient in the system: a vignette behind the hero composition. */
+.hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(
+    62% 62% at 18% 34%,
+    oklch(0.483 0.07 165 / 0.16) 0%,
+    oklch(0.247 0.04 200 / 0) 70%
+  );
+  pointer-events: none;
+}
+
+/* Sits inside .container and stays left-aligned — the measure is capped, the
+   block is not centred. */
+.hero__inner {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-20);
+  max-width: 760px;
+}
+
+.hero__title {
+  font-size: var(--text-display);
+  line-height: var(--leading-display);
+  letter-spacing: var(--tracking-display);
+  color: var(--color-bone);
+}
+
+.hero__tagline {
+  font-size: var(--text-subheading);
+  line-height: var(--leading-subheading);
+  letter-spacing: var(--tracking-subheading);
+  color: var(--color-silver);
+  max-width: 34ch;
+}
+
+.hero__description {
+  font-size: 16px;
+  line-height: 1.38;
+  color: var(--color-steel);
+  max-width: 52ch;
+}
+
+.hero .btn--primary {
+  margin-top: var(--spacing-12);
+}
+
+/* ==========================================================================
+   Benefits
+   ========================================================================== */
+
+.benefits {
+  padding-block: var(--section-gap);
+}
+
+.benefits__heading {
+  font-size: var(--text-heading);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-heading);
+  color: var(--color-bone);
+  max-width: 700px;
+  margin-bottom: var(--spacing-48);
+}
+
+/* Hairline grid: the 1px gap exposes the slate backing as the divider, so
+   the block reads as a technical floorplan rather than as floating cards. */
+.benefits__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background-color: var(--color-slate-base);
+  border: 1px solid var(--color-slate-base);
+  border-radius: var(--radius-cards);
+  overflow: hidden;
+}
+
+.benefit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--element-gap);
+  padding: var(--card-padding);
+  background-color: var(--surface-carbon);
+}
+
+.benefit__index {
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: var(--text-caption);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--leading-caption);
+  letter-spacing: var(--tracking-caption);
+  color: var(--color-steel);
+}
+
+.benefit__title {
+  font-size: var(--text-subheading);
+  line-height: var(--leading-subheading);
+  letter-spacing: var(--tracking-subheading);
+  color: var(--color-bone);
+}
+
+.benefit__body {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--color-silver);
+}
+
+/* ==========================================================================
+   Final call to action
+   ========================================================================== */
+
+.final-cta {
+  background-color: var(--surface-carbon);
+  border-top: 1px solid var(--color-slate-base);
+  border-bottom: 1px solid var(--color-slate-base);
+  padding-block: var(--section-gap);
+}
+
+.final-cta__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-16);
+  max-width: 700px;
+}
+
+.final-cta__title {
+  font-size: var(--text-heading);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-heading);
+  color: var(--color-bone);
+}
+
+.final-cta__body {
+  font-size: 16px;
+  line-height: 1.38;
+  color: var(--color-silver);
+  max-width: 52ch;
+}
+
+.final-cta .btn--primary {
+  margin-top: var(--spacing-8);
+}
+
+/* ==========================================================================
+   Footer
+   ========================================================================== */
+
+.site-footer {
+  margin-top: auto;
+  padding-block: var(--spacing-40);
+  border-top: 1px solid var(--color-slate-base);
+}
+
+.site-footer__text {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--color-steel);
+}
+
+.site-footer__link {
+  color: var(--color-ash);
+  transition: color 120ms ease;
+}
+
+.site-footer__link:hover {
+  color: var(--color-bone);
+}
+
+/* ==========================================================================
+   Responsive
+   ========================================================================== */
+
+@media (max-width: 1023px) {
+  .hero__title {
+    font-size: 50px;
+    letter-spacing: -0.15px;
+  }
+
+  .benefits__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 767px) {
+  .hero {
+    padding-block: var(--spacing-64) var(--spacing-48);
+  }
+
+  .hero__tagline {
+    max-width: none;
+  }
+
+  .benefits,
+  .final-cta {
+    padding-block: var(--spacing-56);
+  }
+
+  .benefits__heading {
+    margin-bottom: var(--spacing-32);
+  }
+}
+
+@media (max-width: 639px) {
+  .hero__title {
+    font-size: var(--text-heading);
+    letter-spacing: var(--tracking-heading);
+  }
+
+  .benefits__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Keep the primary action at a comfortable touch target on small screens. */
+  .btn--primary {
+    padding: 12px 16px;
+  }
+}

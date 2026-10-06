@@ -1,0 +1,512 @@
+/* ==========================================================================
+   x402Go — dashboard shell
+
+   The dashboard keeps the landing page's language: Void canvas, Carbon and
+   Graphite surfaces stepped by colour, 1px Slate hairlines, no shadows. The
+   sidebar is structure, not decoration, so it is separated by a hairline rather
+   than by elevation.
+   ========================================================================== */
+
+.dash {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  min-height: 100vh;
+  background-color: var(--surface-void);
+}
+
+/* ==========================================================================
+   Sidebar
+   ========================================================================== */
+
+.dash__sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-32);
+  padding: var(--spacing-24) var(--spacing-16);
+  background-color: var(--surface-carbon);
+  border-right: 1px solid var(--color-slate-base);
+}
+
+.dash__brand {
+  padding-inline: var(--spacing-12);
+}
+
+.dash__nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Navigation Link, per DESIGN.md: 12px mono, 0.053em tracking, uppercase,
+   Silver at rest, no fill and no underline. Green is the active state and
+   nothing else. */
+.dash__nav-link {
+  display: flex;
+  align-items: center;
+  padding: var(--spacing-12);
+  border-left: 1px solid transparent;
+  border-radius: var(--radius-nav);
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: 12px;
+  font-weight: var(--font-weight-regular);
+  line-height: 1.25;
+  letter-spacing: 0.053em;
+  text-transform: uppercase;
+  text-decoration: none;
+  color: var(--color-silver);
+  transition: color 120ms ease, background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.dash__nav-link:hover {
+  color: var(--color-bone);
+  background-color: var(--surface-graphite);
+}
+
+.dash__nav-link--active {
+  color: var(--color-phosphor-green);
+  border-left-color: var(--color-phosphor-green);
+  background-color: var(--surface-graphite);
+}
+
+.dash__account {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-12);
+  margin-top: auto;
+  padding: var(--spacing-16) var(--spacing-12) 0;
+  border-top: 1px solid var(--color-slate-base);
+}
+
+.dash__account-label {
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  letter-spacing: var(--tracking-caption);
+  text-transform: uppercase;
+  color: var(--color-steel);
+}
+
+/* ==========================================================================
+   Wallet control — RainbowKit's state rendered as our own markup
+   ========================================================================== */
+
+.wallet-button__connected {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-8);
+}
+
+.wallet-button__chain,
+.wallet-button__account {
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: inherit;
+}
+
+.wallet-button__account {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: 13px;
+  letter-spacing: 0.014em;
+  color: var(--color-silver);
+  transition: color 120ms ease;
+  word-break: break-all;
+  text-align: left;
+}
+
+.wallet-button__account:hover {
+  color: var(--color-bone);
+}
+
+.wallet-button__alias {
+  font-family: var(--font-suisseintl);
+  font-feature-settings: var(--font-features-sans);
+  font-size: 12px;
+  letter-spacing: var(--tracking-body);
+  color: var(--color-steel);
+}
+
+/* ==========================================================================
+   Page frame
+   ========================================================================== */
+
+/* Without `min-width: 0` a wide table would stretch the grid column instead
+   of scrolling inside it. */
+.dash__main {
+  min-width: 0;
+}
+
+.dash-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-32);
+  width: 100%;
+  max-width: var(--page-max-width);
+  padding: var(--spacing-32) var(--spacing-40) var(--spacing-80);
+}
+
+.page-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
+}
+
+.page-head__title {
+  font-size: var(--text-heading);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-heading);
+  color: var(--color-bone);
+}
+
+.page-head__desc {
+  font-size: 16px;
+  line-height: 1.38;
+  color: var(--color-steel);
+  max-width: 62ch;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-16);
+}
+
+/* Section label — the mono "system readout" above a block of content. */
+.section__label {
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  letter-spacing: var(--tracking-caption);
+  text-transform: uppercase;
+  color: var(--color-steel);
+}
+
+/* Body copy introducing a section — SuisseIntl, per the pairing rule that mono
+   is never used for prose. */
+.section__desc {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--color-steel);
+  max-width: 62ch;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-12);
+  flex-wrap: wrap;
+}
+
+/* ==========================================================================
+   Sign-in gate
+   ========================================================================== */
+
+.gate {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background-color: var(--surface-void);
+}
+
+.gate__header {
+  padding-block: var(--spacing-24);
+}
+
+.gate__main {
+  display: flex;
+  align-items: flex-start;
+  flex: 1;
+  padding-block: var(--spacing-64) var(--spacing-128);
+}
+
+/* Capped measure, left-aligned: the system never centres a composition. */
+.gate__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-16);
+  max-width: 560px;
+}
+
+.gate__label {
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  letter-spacing: var(--tracking-caption);
+  text-transform: uppercase;
+  color: var(--color-steel);
+}
+
+.gate__title {
+  font-size: var(--text-heading);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-heading);
+  color: var(--color-bone);
+}
+
+.gate__body {
+  font-size: 16px;
+  line-height: 1.38;
+  color: var(--color-steel);
+  max-width: 58ch;
+}
+
+.gate__session {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--color-steel);
+}
+
+.gate__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-16);
+  margin-top: var(--spacing-8);
+  flex-wrap: wrap;
+}
+
+/* A step in the gate that collects input. Capped narrower than the prose above
+   it so the field reads as a control rather than a paragraph. */
+.gate__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-16);
+  width: 100%;
+  max-width: 480px;
+  margin-top: var(--spacing-8);
+}
+
+/* ==========================================================================
+   Payment activity chart
+   ========================================================================== */
+
+.chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-16);
+  padding: var(--card-padding);
+  background-color: var(--surface-carbon);
+  border: 1px solid var(--color-slate-base);
+  border-radius: var(--radius-cards);
+}
+
+/* Bars are laid out with flexbox rather than SVG: they stay crisp and
+   responsive, and the system only ever needed rectangles. */
+.chart__bars {
+  display: flex;
+  align-items: stretch;
+  gap: var(--spacing-8);
+  height: 240px;
+  padding-bottom: var(--spacing-8);
+  border-bottom: 1px solid var(--color-slate-base);
+  overflow-x: auto;
+}
+
+.chart__bucket {
+  display: flex;
+  flex: 1 0 32px;
+  flex-direction: column;
+  gap: var(--spacing-8);
+  min-width: 0;
+}
+
+.chart__columns {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  flex: 1;
+  min-height: 0;
+}
+
+.chart__bar {
+  flex: 1;
+  min-height: 1px;
+  background-color: var(--color-emerald-depth);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  transition: background-color 120ms ease;
+}
+
+.chart__bar:hover {
+  background-color: var(--color-phosphor-green);
+}
+
+.chart__bar--fee {
+  background-color: var(--color-slate-base);
+}
+
+.chart__bar--fee:hover {
+  background-color: var(--color-steel);
+}
+
+.chart__tick {
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  letter-spacing: var(--tracking-caption);
+  color: var(--color-steel);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.chart__legend {
+  display: flex;
+  gap: var(--spacing-20);
+  flex-wrap: wrap;
+}
+
+.chart__legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  font-size: 12px;
+  color: var(--color-steel);
+}
+
+.chart__swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: var(--radius-sm);
+  background-color: var(--color-emerald-depth);
+}
+
+.chart__swatch--secondary {
+  background-color: var(--color-slate-base);
+}
+
+/* ==========================================================================
+   Key metadata and the current payout address
+   ========================================================================== */
+
+.key-meta {
+  display: flex;
+  gap: var(--spacing-32);
+  flex-wrap: wrap;
+  margin: 0;
+}
+
+.key-meta__item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.key-meta__term {
+  margin: 0;
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  letter-spacing: var(--tracking-caption);
+  text-transform: uppercase;
+  color: var(--color-steel);
+}
+
+.key-meta__detail {
+  margin: 0;
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: 13px;
+  letter-spacing: 0.014em;
+  color: var(--color-silver);
+  word-break: break-all;
+}
+
+.payout-current {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--color-steel);
+  word-break: break-all;
+}
+
+/* ==========================================================================
+   Responsive — the sidebar becomes a band above the content
+   ========================================================================== */
+
+@media (max-width: 1023px) {
+  .dash {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dash__sidebar {
+    gap: var(--spacing-16);
+    padding: var(--spacing-16);
+    border-right: 0;
+    border-bottom: 1px solid var(--color-slate-base);
+  }
+
+  .dash__brand {
+    padding-inline: 0;
+  }
+
+  .dash__nav {
+    flex-direction: row;
+    overflow-x: auto;
+  }
+
+  .dash__nav-link {
+    border-left: 0;
+    border-bottom: 1px solid transparent;
+    white-space: nowrap;
+  }
+
+  .dash__nav-link--active {
+    border-left-color: transparent;
+    border-bottom-color: var(--color-phosphor-green);
+  }
+
+  .dash__account {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-16);
+    margin-top: 0;
+    padding: var(--spacing-16) 0 0;
+    flex-wrap: wrap;
+  }
+
+  .dash__account-label {
+    display: none;
+  }
+
+  .dash-page {
+    padding: var(--spacing-24) var(--spacing-24) var(--spacing-64);
+  }
+}
+
+@media (max-width: 639px) {
+  .dash-page {
+    padding: var(--spacing-20) var(--spacing-16) var(--spacing-56);
+  }
+
+  .gate__main {
+    padding-block: var(--spacing-40) var(--spacing-80);
+  }
+
+  .gate__title,
+  .page-head__title {
+    font-size: 25px;
+    letter-spacing: var(--tracking-heading-sm);
+  }
+
+  /* Touch targets, same rule the landing page uses. */
+  .gate__actions .btn,
+  .dash__account .btn--ghost {
+    padding: 12px 16px;
+  }
+}
