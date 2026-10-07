@@ -20,6 +20,30 @@ export async function fetchOverview() {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Account — backend/src/docs/account.yaml                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `GET /account` → 200 `{ address, vaults: [{ network, networkName, chainId,
+ * address, deployed, explorerUrl }] }`
+ *
+ * The account and its vault addresses, taken from the session. `address` is the
+ * authenticated wallet; each `vaults` entry is that merchant's deterministic
+ * vault address on one network, which is the `payTo` an x402 challenge names.
+ *
+ * `deployed` is `false` until a vault is actually deployed at the address, and
+ * `null` when the backend could not reach the chain. Neither says anything
+ * about whether the address is correct — it is fixed the moment it is derived.
+ * A caller that renders `address` without reading `deployed` will imply a vault
+ * exists where none does.
+ *
+ * 401 when the session is gone.
+ */
+export function fetchAccount() {
+  return apiFetch('/account');
+}
+
+/* -------------------------------------------------------------------------- */
 /* Payout wallet — backend/src/docs/payout.yaml                               */
 /* -------------------------------------------------------------------------- */
 

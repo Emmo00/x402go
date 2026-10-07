@@ -233,13 +233,25 @@ export function Address({ value, full = false }) {
 /* Secret                                                                     */
 /* -------------------------------------------------------------------------- */
 
-export function SecretValue({ value, copyLabel = 'Copy' }) {
+/**
+ * A monospace value with a copy action beside it.
+ *
+ * For anything a user has to transcribe exactly — a key, an address — where
+ * selecting the text by hand is both fiddly and easy to get wrong. The value is
+ * shown in full rather than truncated: this is the row that exists so it can be
+ * copied, and a truncated value cannot be checked against anything.
+ */
+export function CopyableValue({ value, copyLabel = 'Copy' }) {
   return (
     <div className="secret">
       <code>{value}</code>
       <CopyButton value={value} label={copyLabel} />
     </div>
   );
+}
+
+export function SecretValue({ value, copyLabel = 'Copy' }) {
+  return <CopyableValue value={value} copyLabel={copyLabel} />;
 }
 
 /* -------------------------------------------------------------------------- */

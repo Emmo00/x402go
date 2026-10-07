@@ -435,6 +435,81 @@
 }
 
 /* ==========================================================================
+   Vault addresses — one row per network
+   ========================================================================== */
+
+.vault-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-20);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vault {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
+  padding-top: var(--spacing-20);
+  border-top: 1px solid var(--color-slate-base);
+}
+
+/* The card header already closes itself with its own rule, so the first row
+   adds only its padding — otherwise the two lines sit a few pixels apart. */
+.vault:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.vault__head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-12);
+  flex-wrap: wrap;
+}
+
+.vault__network {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--color-bone);
+}
+
+.vault__chain {
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  letter-spacing: var(--tracking-caption);
+  text-transform: uppercase;
+  color: var(--color-steel);
+}
+
+/* Held near the readable measure: this is the sentence that says whether the
+   address above it can receive money, and it should not be skimmed past. */
+.vault__note {
+  margin: 0;
+  max-width: 66ch;
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--color-steel);
+}
+
+.vault__explorer {
+  align-self: flex-start;
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: 12px;
+  letter-spacing: 0.053em;
+  color: var(--color-ash);
+  text-decoration: none;
+}
+
+.vault__explorer:hover {
+  color: var(--color-bone);
+}
+
+/* ==========================================================================
    Responsive — the sidebar becomes a band above the content
    ========================================================================== */
 

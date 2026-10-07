@@ -17,6 +17,7 @@ vi.mock('../auth/AuthContext', () => ({
 }));
 
 vi.mock('../api/dashboard', () => ({
+  fetchAccount: (...args) => api.fetchAccount(...args),
   fetchPayoutAddress: (...args) => api.fetchPayoutAddress(...args),
   updatePayoutAddress: (...args) => api.updatePayoutAddress(...args),
   createApiKey: (...args) => api.createApiKey(...args),
@@ -78,6 +79,19 @@ function renderJourney() {
 }
 
 beforeEach(() => {
+  api.fetchAccount = vi.fn().mockResolvedValue({
+    address: WALLET_LOWER,
+    vaults: [
+      {
+        network: 'celo',
+        networkName: 'Celo Mainnet',
+        chainId: 42220,
+        address: '0x59f3d0c53bc46a35a81e478b080cc8afa2fc88de',
+        deployed: false,
+        explorerUrl: 'https://celoscan.io/address/0x59f3d0c53bc46a35a81e478b080cc8afa2fc88de',
+      },
+    ],
+  });
   api.fetchPayoutAddress = vi.fn().mockResolvedValue({ payTo: null });
   api.updatePayoutAddress = vi.fn().mockResolvedValue({ payTo: WALLET_LOWER });
   // Once `GET /api-keys` exists this is what a fresh account reads back: no key.

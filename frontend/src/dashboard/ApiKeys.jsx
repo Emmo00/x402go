@@ -17,6 +17,7 @@ import { formatTimestamp } from './format';
 import { useOnboardingHandoff } from './onboardingHandoff';
 import ResourceState, { ActionErrorNotice } from './ResourceState';
 import { useResource } from './useResource';
+import VaultAddresses from './VaultAddress';
 
 /** The documented 409 from `POST /api-keys`, in the dashboard's own words. */
 const ALREADY_HAS_KEY =
@@ -252,6 +253,11 @@ export default function ApiKeys() {
         onConfirm={() => run('rotate')}
         onCancel={() => setConfirming(false)}
       />
+
+      {/* Last on the page, deliberately: a key is disclosed exactly once by
+          create and rotate, and nothing may sit between the action and the
+          value it reveals. */}
+      <VaultAddresses />
     </div>
   );
 }

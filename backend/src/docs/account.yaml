@@ -1,0 +1,138 @@
+paths:
+  /account:
+    get:
+      tags:
+        - Account
+      summary: Reads the authenticated merchant's account and vault addresses
+      description: >
+        Returns the signed-in merchant's wallet address and, for every supported
+        network, the deterministic vault address derived for that merchant.
+
+
+        **The vault address is the merchant's `payTo`.** It is what an x402
+        payment challenge names as the destination, and it is a pure function of
+        the merchant's wallet and the deployed factory — so it exists, and is
+        final, before any vault is deployed at it. The same merchant and factory
+        always produce the same address; two merchants never share one.
+
+
+        It is calculated when the merchant signs in and stored on the account.
+        This endpoint reads that record rather than recomputing it, so it costs
+        one document read rather than a derivation per request. The factory's
+        own `vaultOf(merchant)` remains authoritative: it is what the records
+        are derived from, and a stored value that disagreed with it would be
+        corrected rather than served.
+
+
+        **Nothing here deploys a vault.** `deployed` reports whether a contract
+        currently exists at the address, read from the chain on this request.
+        It is `false` for a merchant who has never needed a vault, which is the
+        normal state for a new account, and it does not make the address any
+        less correct or less usable — payments sent to an undeployed vault
+        address are simply not possible yet, since there is no contract to
+        receive them. It is `null` when the chain could not be reached, which is
+        reported as "unknown" rather than as "not deployed".
+
+
+        Addresses are lowercased, like every other address this API returns. An
+        EVM address is a 20-byte value and its mixed-case form is a checksum
+        over it, not part of it.
+
+
+        The account is taken from the authenticated session, so one account can
+        never read another's vaults.
+      produces:
+        - application/json
+      security:
+        - sessionCookie: []
+      responses:
+        200:
+          description: The authenticated merchant's account.
+          schema:
+            $ref: '#/definitions/account'
+        401:
+          description: No authenticated session.
+          schema:
+            $ref: '#/definitions/accountError'
+        404:
+          description: >
+            The authenticated account no longer exists. Normally surfaced as
+            `401` by the session middleware; this is the branch taken if the
+            account is removed between authentication and the read.
+          schema:
+            $ref: '#/definitions/accountError'
+          examples:
+            application/json:
+              message: Account not found
+        500:
+          description: Unexpected server error.
+          schema:
+            $ref: '#/definitions/accountError'
+definitions:
+  account:
+    type: object
+    properties:
+      address:
+        type: string
+        description: >
+          The merchant's wallet address, lowercased. This is the address that
+          signed in and the address a `changePayout` signature must come from.
+        example: '0xc0b0e77000aa0826b7db9d1fe3760d26559643bb'
+      vaults:
+        type: array
+        description: >
+          One entry per supported network, in a fixed order with Celo Mainnet
+          first. Every supported network is present: a merchant has a vault
+          address on each, whether or not they have used it.
+        items:
+          $ref: '#/definitions/accountVault'
+  accountVault:
+    type: object
+    properties:
+      network:
+        type: string
+        description: >
+          Stable network key. This is what a later call names when it targets a
+          specific network.
+        enum:
+          - celo
+          - celoSepolia
+        example: celo
+      networkName:
+        type: string
+        description: The same network in words, for display.
+        example: Celo Mainnet
+      chainId:
+        type: integer
+        description: >
+          EIP-155 chain id. The value a wallet shows and a signature commits to.
+        example: 42220
+      address:
+        type: string
+        description: >
+          The merchant's deterministic vault address on this network, lowercased
+          — their `payTo`. Present and final whether or not a vault has been
+          deployed at it.
+        example: '0x59f3d0c53bc46a35a81e478b080cc8afa2fc88de'
+      deployed:
+        type: boolean
+        description: >
+          Whether a contract currently exists at `address`, read from the chain.
+          `false` is the normal state for a merchant who has not needed a vault
+          yet, and says nothing about whether the address is correct. `null`
+          means the chain could not be reached, so the state is unknown — it is
+          not a synonym for `false`.
+        x-nullable: true
+        example: false
+      explorerUrl:
+        type: string
+        description: >
+          Block-explorer page for the vault address, so a client does not have
+          to build explorer URLs from chain ids.
+        example: 'https://celoscan.io/address/0x59f3d0c53bc46a35a81e478b080cc8afa2fc88de'
+  accountError:
+    type: object
+    properties:
+      message:
+        type: string
+        example: Authentication required

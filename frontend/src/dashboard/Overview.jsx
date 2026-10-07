@@ -5,6 +5,7 @@ import PaymentActivityChart from './PaymentActivityChart';
 import ResourceState from './ResourceState';
 import TransactionsTable from './TransactionsTable';
 import { useResource } from './useResource';
+import VaultAddresses from './VaultAddress';
 
 /**
  * Overview — balances, fee totals, payment activity and the transaction feed.
@@ -12,6 +13,10 @@ import { useResource } from './useResource';
  * Every figure on this screen comes from `fetchOverview`. Until that endpoint
  * exists the page renders an explicit unavailable state rather than zeros or
  * sample values, so the numbers a merchant sees are always real.
+ *
+ * The vault address is the exception, and it leads the page: it comes from a
+ * different endpoint that does exist, so the one piece of information here that
+ * is both real and immediately useful is the one a merchant sees first.
  */
 export default function Overview() {
   const resource = useResource(fetchOverview);
@@ -24,6 +29,8 @@ export default function Overview() {
           Track your payments, balance, fees, and usage in one place.
         </p>
       </header>
+
+      <VaultAddresses />
 
       <ResourceState
         resource={resource}

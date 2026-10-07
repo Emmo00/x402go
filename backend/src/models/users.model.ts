@@ -35,6 +35,39 @@ const apiKeySchema = new mongoose.Schema<IApiKey>(
   },
 );
 
+/**
+ * One merchant vault address.
+ *
+ * `_id: false` for the same reason as `apiKeySchema`: the entry is identified
+ * by the map key that holds it, and an ObjectId would only be a second,
+ * redundant identifier.
+ *
+ * There is deliberately no `deployed` field. Whether a vault is deployed is a
+ * fact about the chain that changes without this document being written, so
+ * storing it would create a value that is wrong the moment someone else
+ * deploys. It is read from the chain on the requests that need it.
+ */
+const vaultSchema = new mongoose.Schema<IVault>(
+  {
+    address: {
+      type: String,
+      required: true,
+      lowercase: true,
+    },
+    chainId: {
+      type: Number,
+      required: true,
+    },
+    createdAt: {
+      type: Date,
+      required: true,
+    },
+  },
+  {
+    _id: false,
+  },
+);
+
 const userSchema = new mongoose.Schema<IUser>(
   {
     address: {
@@ -76,6 +109,20 @@ const userSchema = new mongoose.Schema<IUser>(
       type: String,
       required: false,
       lowercase: true,
+    },
+
+    // The merchant's vault address per chain, keyed by chain name. A map keeps
+    // "one vault per merchant per chain" true by construction: a second write
+    // for the same chain replaces the entry rather than adding a rival.
+    //
+    // `default: undefined` rather than `{}` so an account that has never signed
+    // in carries no `vaults` key at all, and "has none" is distinguishable from
+    // "has an empty one" in the raw document.
+    vaults: {
+      type: Map,
+      of: vaultSchema,
+      required: false,
+      default: undefined,
     },
   },
   {

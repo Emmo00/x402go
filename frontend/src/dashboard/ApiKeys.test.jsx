@@ -16,6 +16,7 @@ vi.mock('../auth/AuthContext', () => ({
 }));
 
 vi.mock('../api/dashboard', () => ({
+  fetchAccount: (...args) => api.fetchAccount(...args),
   fetchPayoutAddress: (...args) => api.fetchPayoutAddress(...args),
   updatePayoutAddress: (...args) => api.updatePayoutAddress(...args),
   createApiKey: (...args) => api.createApiKey(...args),
@@ -70,6 +71,19 @@ const openRotation = async () => {
 };
 
 beforeEach(() => {
+  api.fetchAccount = vi.fn().mockResolvedValue({
+    address: '0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed',
+    vaults: [
+      {
+        network: 'celo',
+        networkName: 'Celo Mainnet',
+        chainId: 42220,
+        address: '0x59f3d0c53bc46a35a81e478b080cc8afa2fc88de',
+        deployed: false,
+        explorerUrl: 'https://celoscan.io/address/0x59f3d0c53bc46a35a81e478b080cc8afa2fc88de',
+      },
+    ],
+  });
   api.fetchPayoutAddress = vi.fn();
   api.updatePayoutAddress = vi.fn();
   // What an account with one key reads back once `GET /api-keys` exists.
