@@ -2,6 +2,7 @@ import { getAddress, type Address } from 'viem';
 import { X402_VAULT_FACTORY_ABI } from '../abi';
 import { chainByKey, type ChainKey } from '../config';
 import { getPublicClient, type ChainClientProvider } from '../utils/chainClient';
+import type { ContractWrite } from '../utils/transaction';
 import { predictVaultAddress, sameAddress } from '../utils/vaultAddress';
 
 /**
@@ -194,19 +195,22 @@ export class VaultFactoryService {
    * A transaction request that deploys a merchant's vault, for a signer to
    * complete. Nothing here signs or sends it.
    *
-   * Included because the deployment step is the next one and the shape belongs
-   * with the rest of the factory's interface; the sign-in flow in this task
-   * deliberately never calls it.
+   * Deploying and initialising the payout are one call, not two: the factory
+   * runs `initPayout` itself, inside `createVault`, and only when the payout
+   * differs from the merchant. There is no way for the backend to initialise a
+   * payout afterwards — `X402Vault.initPayout` refuses any caller but the
+   * factory, and the factory will not create the same vault twice. So `payout`
+   * here is not a hint: it is the value the vault will hold.
    */
   public buildCreateVaultRequest(
     chain: ChainKey,
     merchant: Address,
     payout: Address,
-  ): { to: Address; abi: typeof X402_VAULT_FACTORY_ABI; functionName: 'createVault'; args: readonly [Address, Address] } {
+  ): ContractWrite {
     const { factory } = chainByKey(chain).contracts;
 
     return {
-      to: factory,
+      address: factory,
       abi: X402_VAULT_FACTORY_ABI,
       functionName: 'createVault',
       args: [merchant, payout] as const,

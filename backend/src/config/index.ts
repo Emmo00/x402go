@@ -25,3 +25,13 @@ export {
   tokensFor,
   type TokenConfig,
 } from './tokens';
+
+export {
+  FACILITATOR_FEE_MICRO_USD,
+  TOTAL_FEE_MICRO_USD,
+  X402GO_FEE_MICRO_USD,
+  feesFor,
+  feesForAddress,
+  hasFeeSchedule,
+  type FeeSchedule,
+} from './fees';

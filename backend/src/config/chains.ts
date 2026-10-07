@@ -41,6 +41,15 @@ export interface ChainConfig {
    * value instead of whichever one happened to be set at import time.
    */
   readonly rpcUrl: string;
+  /**
+   * The Celo facilitator this chain's payments are settled through.
+   *
+   * Per chain because the hosted facilitator runs one deployment per network,
+   * and a payment signed for one is rejected by the other. Read from the
+   * environment like `rpcUrl`, and for the same reason — an operator may run
+   * their own facilitator — with the hosted endpoint as the fallback.
+   */
+  readonly facilitatorUrl: string;
   readonly contracts: {
     /**
      * The deployed factory. Identical on both Celo networks, because the
@@ -75,6 +84,9 @@ const CELO: ChainConfig = {
   get rpcUrl() {
     return process.env.CELO_RPC_URL || 'https://forno.celo.org';
   },
+  get facilitatorUrl() {
+    return process.env.CELO_FACILITATOR_URL || 'https://api.x402.celo.org';
+  },
   contracts: {
     factory: '0x698E55e1c8b4d9eAACbCfceCdd9D4E85B1D2701e',
     vaultImplementation: '0xAc67386A25CfCE52a769957554CBb825641780d2',
@@ -90,6 +102,9 @@ const CELO_SEPOLIA: ChainConfig = {
     return (
       process.env.CELO_SEPOLIA_RPC_URL || 'https://forno.celo-sepolia.celo-testnet.org'
     );
+  },
+  get facilitatorUrl() {
+    return process.env.CELO_SEPOLIA_FACILITATOR_URL || 'https://api.x402.sepolia.celo.org';
   },
   contracts: {
     factory: '0x698E55e1c8b4d9eAACbCfceCdd9D4E85B1D2701e',

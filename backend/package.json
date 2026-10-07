@@ -7,6 +7,7 @@
     "cpm": "pm2 start src/server.ts --interpreter bun --watch",
     "test": "bun test",
     "verify:e2e": "bun run verify-e2e.ts",
+    "verify:lifecycle": "bun run verify-lifecycle.ts",
     "lint": "tslint -p tsconfig.json -c tslint.json",
     "build": "tsc -p .",
     "production": "bun dist/server.js"

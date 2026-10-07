@@ -1,0 +1,913 @@
+paths:
+  /supported:
+    get:
+      tags:
+        - Facilitator
+      summary: What the Celo facilitator will settle
+      description: >
+        The facilitator's own capability list — the schemes, networks and assets
+        it will settle today, and the signer addresses it settles through — read
+        from Celo and returned unchanged.
+
+
+        This is a **proxy, not an interpretation**. The response is Celo's, byte
+        for byte, so a client that reads `kinds` from here and `kinds` from the
+        facilitator sees the same thing. x402Go does not add, remove, rename or
+        reorder anything: an asset missing here is missing because the
+        facilitator does not list it, and this deployment's own token table is
+        not consulted at all.
+
+
+        The endpoint is **public**. An x402 client needs it before it has any
+        credential to present, and it carries no merchant data — it is the same
+        answer for every caller. The Celo API key x402Go presents to the
+        facilitator is added on the way out and never appears in the response.
+        (The hosted facilitator currently answers this one endpoint without a
+        credential; x402Go presents the key anyway, because a self-hosted
+        facilitator may well gate it and the credential must never be the reason
+        a request fails.)
+
+
+        Responses are cached briefly, per network, so a burst of callers spends
+        one facilitator call rather than one each.
+      produces:
+        - application/json
+      parameters:
+        - in: query
+          name: network
+          required: false
+          type: string
+          description: >
+            Which facilitator to read from: `celo`, `celoSepolia`, or the CAIP-2
+            form (`eip155:42220`, `eip155:11142220`). Defaults to Celo Mainnet,
+            so an unqualified request is never quietly answered from a testnet.
+          enum:
+            - celo
+            - celoSepolia
+            - 'eip155:42220'
+            - 'eip155:11142220'
+      responses:
+        200:
+          description: The facilitator's `/supported` response, unmodified.
+          schema:
+            $ref: '#/definitions/supportedResponse'
+        400:
+          description: >
+            `network` names a chain this deployment does not serve. Refused
+            rather than defaulted, so a request for an unknown network is not
+            answered with mainnet's capabilities.
+          schema:
+            $ref: '#/definitions/facilitatorError'
+          examples:
+            application/json:
+              message: That network is not supported.
+        502:
+          description: >
+            The facilitator answered with something unusable — a non-JSON body,
+            an HTML error page from an intermediary, or a JSON body without the
+            `kinds` list.
+          schema:
+            $ref: '#/definitions/facilitatorError'
+          examples:
+            application/json:
+              message: The payment facilitator returned an unexpected response.
+        503:
+          description: The facilitator could not be reached. Worth retrying.
+          schema:
+            $ref: '#/definitions/facilitatorError'
+          examples:
+            application/json:
+              message: >-
+                The payment facilitator could not be reached. Try again in a
+                moment.
+  /verify:
+    post:
+      tags:
+        - Facilitator
+      summary: Checks a payment without moving anything
+      description: >
+        Validates an x402 payment against this merchant's vault and asks the
+        Celo facilitator whether it is well-formed and correctly signed.
+
+
+        **This endpoint changes nothing.** No settlement record is written, no
+        balance moves, and no transaction is sent. A client that verifies the
+        same payment a hundred times has a hundred answers and identical books.
+        Settlement is `POST /settle`, and it is the only endpoint that records
+        or moves anything.
+
+
+        ## What is checked before Celo is called
+
+
+        The request must be x402 **version 2** with the `exact` scheme, on a
+        network this deployment serves, in an asset the facilitator lists and
+        this deployment has enabled. `paymentRequirements.payTo` **and** the
+        recipient inside the signed authorization must both equal the
+        authenticated merchant's deterministic vault address; a payment naming
+        another merchant's vault, an arbitrary wallet, or a bare address is
+        refused. The amount in the signed authorization must equal the amount in
+        the requirements, and it must exceed the total fee of **$0.002** (the
+        $0.001 x402Go fee plus the $0.001 facilitator fee) in the asset's own
+        atomic units, compared as integers.
+
+
+        Every one of those refusals happens before the facilitator is contacted,
+        so a payment that was never going to be accepted never spends a
+        facilitator call.
+
+
+        ## The merchant is never named by the request
+
+
+        The merchant, and therefore the vault the payment is checked against, is
+        resolved from the API key and nothing else. There is no field in the
+        request body that can choose whose vault a payment is verified against.
+
+
+        ## A well-formed payment that is invalid is a `200`
+
+
+        When Celo reports the payment invalid, that is a successful
+        *verification*: the body carries `isValid: false` and an
+        `invalidReason`. Read that field, not the status code.
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - in: body
+          name: payment
+          required: true
+          description: >
+            The x402 v2 payment: the requirements the merchant advertised and
+            the payload the payer signed.
+          schema:
+            $ref: '#/definitions/x402PaymentRequest'
+      security:
+        - apiKey: []
+      responses:
+        200:
+          description: >
+            The facilitator's verification result, passed through unchanged.
+            `isValid` is `false` for a payment Celo rejected.
+          schema:
+            $ref: '#/definitions/verifyResponse'
+          examples:
+            application/json:
+              isValid: true
+              payer: '0x4f3Edf983aC636A65A842Ce7c78D9Aa706D3b113'
+        400:
+          description: >
+            The request is not a valid x402 v2 payment request: a missing or
+            unparsable envelope, an `x402Version` other than `2`, a scheme other
+            than `exact`, an unsupported network or asset, a `payTo` that is not
+            an address, an amount that is not an integer string, an incomplete
+            signed authorization, or a signed amount that disagrees with the
+            requirements.
+          schema:
+            $ref: '#/definitions/facilitatorError'
+          examples:
+            application/json:
+              message: >-
+                The signed payment does not match the payment requirements it
+                was sent with.
+        401:
+          description: >
+            No API key, or one that does not authenticate. Every failure here
+            returns the same message, so the response cannot be used to probe
+            which keys once existed.
+          schema:
+            $ref: '#/definitions/facilitatorError'
+          examples:
+            application/json:
+              message: Invalid API key
+        402:
+          description: >
+            The payment is well-formed but does not cover the fees. The total
+            fee is $0.002; a payment equal to it is refused as well as one below
+            it, because it would leave the merchant with nothing.
+          schema:
+            $ref: '#/definitions/facilitatorError'
+          examples:
+            application/json:
+              message: >-
+                The payment does not cover the x402Go and network fees, so it
+                cannot be settled.
+        403:
+          description: >
+            The payment is not addressed to the authenticated merchant's vault.
+            Either the requirements or the signed authorization — or both —
+            name somewhere else.
+          schema:
+            $ref: '#/definitions/facilitatorError'
+          examples:
+            application/json:
+              message: The payment is not addressed to this merchant’s vault.
+        404:
+          description: The authenticated merchant has no vault on that network.
+          schema:
+            $ref: '#/definitions/facilitatorError'
+          examples:
+            application/json:
+              message: No vault is available for this account on that network.
+        500:
+          description: >
+            This server cannot answer: it has no Celo facilitator credential, or
+            no dollar value is configured for the requested asset, so the fee
+            cannot be computed. Neither is something the caller can fix by
+            retrying.
+          schema:
+            $ref: '#/definitions/facilitatorError'
+          examples:
+            application/json:
+              message: This server cannot price a fee in that asset, so it cannot settle it.
+        502:
+          description: >
+            The facilitator answered with something unusable — a non-JSON body,
+            or a JSON body without an `isValid` boolean.
+          schema:
+            $ref: '#/definitions/facilitatorError'
+          examples:
+            application/json:
+              message: The payment facilitator returned an unexpected response.
+        503:
+          description: The facilitator could not be reached. Worth retrying.
+          schema:
+            $ref: '#/definitions/facilitatorError'
+          examples:
+            application/json:
+              message: >-
+                The payment facilitator could not be reached. Try again in a
+                moment.
+        504:
+          description: >
+            The facilitator did not answer within the configured timeout. The
+            payment was not settled by this request either way — verification
+            moves nothing.
+          schema:
+            $ref: '#/definitions/facilitatorError'
+          examples:
+            application/json:
+              message: >-
+                The payment facilitator did not respond in time, so the outcome
+                is unknown.
+  /settle:
+    post:
+      tags:
+        - Facilitator
+      summary: Settles a payment, and records the accounting
+      description: >
+        The settlement and accounting boundary. This is the only endpoint that
+        moves money and the only one that writes an accounting record.
+
+
+        It performs every check `POST /verify` performs — the same version,
+        scheme, network, asset, vault and fee validation, resolved from the
+        authenticated API key rather than from the request body — and then
+        submits the payment to the Celo facilitator.
+
+
+        ## The record is written before Celo is called
+
+
+        A `pending` settlement is persisted **before** the request goes out, for
+        a reason that is easy to miss: a record written only on success cannot
+        describe a payment that is in flight, a payment that failed, or a
+        payment whose outcome nobody knows. All three are states this system has
+        to be able to report, so the record exists first and is finalised after.
+
+
+        ## Nothing is credited until Celo confirms
+
+
+        The only transition that makes a payment count is `pending → settled`,
+        and it is taken only on a response that actually said `success: true`.
+        A refusal, a failure and an unknown outcome all leave the payment
+        uncounted. There is no mutable balance to get out of step: a merchant's
+        balance is the sum of `merchantAmount` over their `settled` records, so
+        "finalising accounting" is that single transition.
+
+
+        ## The accounting
+
+
+        The amount the payer signed is the gross. From it, server-side:
+
+
+        `grossAmount = merchantAmount + x402GoFee + facilitatorFee`
+
+
+        where `merchantAmount > 0`, the x402Go fee is **$0.001** and the
+        facilitator fee is **$0.001**. All five figures are integer strings in
+        the asset's atomic units and are computed and compared as integers, never
+        as floating point. Fee values supplied by the client are ignored
+        entirely — nothing in the request body is read as an accounting input.
+
+
+        ## Idempotency
+
+
+        The same signed payment can never be settled twice, recorded twice, or
+        credited twice. `settlementId` is derived deterministically from the
+        signed authorization (chain, asset, payer, recipient, amount, validity
+        window and replay nonce) under a unique index, and the right to submit a
+        settlement is claimed by a compare-and-swap that only one caller can
+        win.
+
+
+        Repeating a `pending` or `pending_reconciliation` settlement does not
+        resubmit it; it returns `409` with the existing record. Repeating a
+        `settled` or `failed` one returns the original result. Send the same
+        payment as many times as you like: it settles once.
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - in: body
+          name: payment
+          required: true
+          description: >
+            The same x402 v2 payment `POST /verify` takes. The signed
+            `paymentPayload` is forwarded to Celo exactly as it arrived — its
+            bytes are what the payer's signature covers, so it is never rebuilt,
+            re-encoded or tidied.
+          schema:
+            $ref: '#/definitions/x402PaymentRequest'
+      security:
+        - apiKey: []
+      responses:
+        200:
+          description: >
+            A settlement that happened, or one that definitively did not. Both
+            are answers, so both are `200`; read `success` to tell them apart.
+            `transaction` is an empty string when nothing moved.
+          schema:
+            $ref: '#/definitions/settleResponse'
+          examples:
+            application/json:
+              success: true
+              transaction: '0x9c1f0e6f1d2a4b7c8e5f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f'
+              network: 'eip155:42220'
+              payer: '0x4f3Edf983aC636A65A842Ce7c78D9Aa706D3b113'
+              amount: '1002000'
+              duplicate: false
+        400:
+          description: >
+            The request is not a valid x402 v2 payment request. Nothing was
+            submitted to the facilitator and nothing was recorded.
+          schema:
+            $ref: '#/definitions/facilitatorError'
+          examples:
+            application/json:
+              message: The request is not a valid x402 payment request.
+        401:
+          description: No API key, or one that does not authenticate.
+          schema:
+            $ref: '#/definitions/facilitatorError'
+          examples:
+            application/json:
+              message: Invalid API key
+        402:
+          description: >
+            The payment does not clear the $0.002 total fee. Refused **before**
+            Celo is contacted, so no settlement is recorded and nothing is
+            submitted. An amount equal to the fee is refused as well as one
+            below it.
+          schema:
+            $ref: '#/definitions/facilitatorError'
+          examples:
+            application/json:
+              message: >-
+                The payment does not cover the x402Go and network fees, so it
+                cannot be settled.
+        403:
+          description: >
+            The payment is not addressed to the authenticated merchant's vault.
+            A payment made out to another merchant's vault is refused here, so
+            one merchant's key can never settle into another's vault.
+          schema:
+            $ref: '#/definitions/facilitatorError'
+          examples:
+            application/json:
+              message: The payment is not addressed to this merchant’s vault.
+        404:
+          description: The authenticated merchant has no vault on that network.
+          schema:
+            $ref: '#/definitions/facilitatorError'
+          examples:
+            application/json:
+              message: No vault is available for this account on that network.
+        409:
+          description: >
+            **The outcome is unknown, or a settlement is already recorded.**
+            Two cases, and the caller must not blindly retry either.
+
+
+            * `settlement_pending_reconciliation` — the payment was submitted
+            and this server never learned whether it landed (a timeout, a lost
+            connection, or an unusable reply). It has deliberately **not** been
+            retried. The merchant has not been credited. Check the settlement's
+            status before doing anything else; resubmitting could settle the
+            same payment twice.
+
+            * A duplicate of a settlement that is still in flight, or a
+            recorded settlement that could not be reused. The existing record is
+            returned rather than a second settlement being attempted.
+          schema:
+            $ref: '#/definitions/settleResponse'
+          examples:
+            application/json:
+              success: false
+              errorReason: settlement_pending_reconciliation
+              errorMessage: >-
+                The settlement was submitted but its outcome is unknown. It has
+                not been retried. Do not resubmit this payment; check its status
+                before acting.
+              transaction: ''
+              network: 'eip155:42220'
+              payer: '0x4f3Edf983aC636A65A842Ce7c78D9Aa706D3b113'
+              duplicate: false
+        500:
+          description: >
+            This server cannot settle: it has no Celo facilitator credential, or
+            no dollar value is configured for the requested asset. A missing
+            credential is the one facilitator failure that **proves nothing was
+            sent**, so the settlement is recorded as `failed` rather than left
+            for reconciliation.
+          schema:
+            $ref: '#/definitions/settleResponse'
+          examples:
+            application/json:
+              success: false
+              errorReason: facilitator-key-unusable
+              transaction: ''
+              network: 'eip155:42220'
+              duplicate: false
+        502:
+          description: >
+            The facilitator answered with something unusable — a non-JSON body,
+            or a JSON body without a `success` boolean. Because the request
+            reached *something*, the outcome is unknown: the settlement is
+            recorded as `pending_reconciliation` and **no** merchant is
+            credited.
+          schema:
+            $ref: '#/definitions/settleResponse'
+          examples:
+            application/json:
+              success: false
+              errorReason: settlement_pending_reconciliation
+              transaction: ''
+              network: 'eip155:42220'
+              duplicate: false
+        503:
+          description: >
+            The facilitator could not be reached. The connection failed, which
+            probably means nothing was sent — but "probably" is not a basis for
+            crediting or for retrying automatically, so the settlement is
+            recorded as `pending_reconciliation`.
+          schema:
+            $ref: '#/definitions/settleResponse'
+          examples:
+            application/json:
+              success: false
+              errorReason: settlement_pending_reconciliation
+              transaction: ''
+              network: 'eip155:42220'
+              duplicate: false
+        504:
+          description: >
+            The facilitator did not answer within the configured timeout. It may
+            already have moved the money. Recorded as `pending_reconciliation`
+            and never retried automatically.
+          schema:
+            $ref: '#/definitions/settleResponse'
+          examples:
+            application/json:
+              success: false
+              errorReason: settlement_pending_reconciliation
+              transaction: ''
+              network: 'eip155:42220'
+              duplicate: false
+definitions:
+  x402PaymentRequest:
+    type: object
+    description: >
+      An x402 **version 2** payment. Both halves are required, and they must
+      agree on the recipient and the amount — see `payto-mismatch` and
+      `amount-mismatch`.
+    required:
+      - x402Version
+      - paymentRequirements
+      - paymentPayload
+    properties:
+      x402Version:
+        type: integer
+        description: >
+          The x402 protocol version. Only `2` is accepted; a version 1 request
+          is refused rather than misread, because v1 puts the amount in a
+          different field and reading one as the other would mis-price a payment.
+        enum:
+          - 2
+        example: 2
+      paymentRequirements:
+        $ref: '#/definitions/paymentRequirements'
+      paymentPayload:
+        $ref: '#/definitions/paymentPayload'
+  paymentRequirements:
+    type: object
+    description: >
+      What the merchant is asking to be paid. Advertised to the payer, and
+      echoed back with the signed payment.
+    required:
+      - scheme
+      - network
+      - amount
+      - asset
+      - payTo
+    properties:
+      scheme:
+        type: string
+        description: The only scheme the Celo facilitator settles.
+        enum:
+          - exact
+        example: exact
+      network:
+        type: string
+        description: >
+          CAIP-2 chain identifier. `celo` and `celo-sepolia` are also accepted
+          as legacy spellings. Any other chain is refused.
+        example: 'eip155:42220'
+      amount:
+        type: string
+        description: >
+          The gross amount, as a string of integer atomic units — never a
+          decimal, never a float. For USDC on Celo Mainnet six decimals are
+          used, so `"1002000"` is $1.002. This is the figure the payer signs,
+          and the one all accounting is derived from.
+        example: '1002000'
+      asset:
+        type: string
+        description: >
+          The token contract address. Keyed by address rather than symbol
+          because USDC is a different contract on each network.
+        example: '0xcebA9300f2b948710d2653dD7B07f33A8B32118C'
+      payTo:
+        type: string
+        description: >
+          The recipient. **Must** equal the authenticated merchant's
+          deterministic vault address for the requested network.
+        example: '0x4f3Edf983aC636A65A842Ce7c78D9Aa706D3b113'
+      maxTimeoutSeconds:
+        type: integer
+        description: How long the payer's authorization stays valid.
+        example: 300
+      extra:
+        type: object
+        description: >
+          The token's EIP-712 domain, published by the facilitator as
+          `name` / `version`. Advisory: nothing in it is read as an accounting
+          input.
+        example:
+          name: USDC
+          version: '2'
+  paymentPayload:
+    type: object
+    description: >
+      The signed payment. Forwarded to the facilitator exactly as it arrived.
+    required:
+      - x402Version
+      - payload
+    properties:
+      x402Version:
+        type: integer
+        enum:
+          - 2
+        example: 2
+      accepted:
+        type: object
+        description: The requirements the payer agreed to. Echoed, for the record.
+      payload:
+        type: object
+        required:
+          - authorization
+        properties:
+          signature:
+            type: string
+            description: >
+              The payer's signature over the authorization. Opaque to x402Go: it
+              is never parsed, validated locally, or modified.
+            example: '0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd'
+          authorization:
+            $ref: '#/definitions/transferAuthorization'
+  transferAuthorization:
+    type: object
+    description: >
+      The `exact` scheme signs an EIP-3009 `TransferWithAuthorization` (or its
+      Permit2 equivalent). Every field is required: a missing one means the
+      payload is not a payment this proxy understands, and defaulting any of
+      them would be inventing part of a signature.
+    required:
+      - from
+      - to
+      - value
+      - validAfter
+      - validBefore
+      - nonce
+    properties:
+      from:
+        type: string
+        description: The account paying. Recorded on the settlement as `payer`.
+        example: '0x4f3Edf983aC636A65A842Ce7c78D9Aa706D3b113'
+      to:
+        type: string
+        description: >
+          The recipient. **Must** equal the merchant's vault, and must equal
+          `paymentRequirements.payTo`. This is the half that actually decides
+          where the money goes.
+        example: '0x4f3Edf983aC636A65A842Ce7c78D9Aa706D3b113'
+      value:
+        type: string
+        description: >
+          The amount, as a string of integer atomic units. Must equal
+          `paymentRequirements.amount`, and is the figure the fee guard is
+          applied to — the signed value, not the advertised one, because the
+          signed value is what will move.
+        example: '1002000'
+      validAfter:
+        type: string
+        description: Unix timestamp before which the authorization is invalid.
+        example: '0'
+      validBefore:
+        type: string
+        description: Unix timestamp after which the authorization is invalid.
+        example: '9999999999'
+      nonce:
+        type: string
+        description: >
+          The replay-prevention nonce — 32 random bytes the payer picks. Part of
+          how `settlementId` is derived, and kept in the clear because it is
+          what an operator reconciles against a block explorer.
+        example: '0x1111111111111111111111111111111111111111111111111111111111111111'
+  supportedResponse:
+    type: object
+    description: >
+      The Celo facilitator's `/supported` response, unmodified. The fields below
+      are the ones a client normally reads; the body is passed through whole, so
+      any field Celo adds is present here too.
+    properties:
+      kinds:
+        type: array
+        description: >
+          What the facilitator will settle: one entry per (version, scheme,
+          network). Celo advertises a version 2 kind carrying a CAIP-2 network
+          and a `supportedAssets` list, plus a legacy version 1 kind with the
+          older network spellings (`celo`, `celo-sepolia`) and no asset list.
+          x402Go settles the version 2 kind only.
+        items:
+          type: object
+          properties:
+            x402Version:
+              type: integer
+              example: 2
+            scheme:
+              type: string
+              example: exact
+            network:
+              type: string
+              example: 'eip155:42220'
+            extra:
+              type: object
+              description: >
+                Present on the version 2 kind only. Carries the assets the
+                facilitator will settle on this network, each with the transfer
+                method it uses (`eip3009` or `permit2`) — which is what
+                determines whether a payer signs a `TransferWithAuthorization`
+                or grants a Permit2 allowance.
+              example:
+                extensions:
+                  - eip2612GasSponsoring
+                defaultAsset:
+                  asset: '0xcebA9300f2b948710d2653dD7B07f33A8B32118C'
+                  symbol: USDC
+                  decimals: 6
+                  name: USDC
+                  version: '2'
+                  assetTransferMethod: eip3009
+                supportedAssets:
+                  - asset: '0xcebA9300f2b948710d2653dD7B07f33A8B32118C'
+                    symbol: USDC
+                    decimals: 6
+                    assetTransferMethod: eip3009
+      extensions:
+        type: array
+        description: Protocol extensions the facilitator supports.
+        items:
+          type: string
+        example:
+          - eip2612GasSponsoring
+      signers:
+        type: object
+        description: >
+          The addresses the facilitator settles through, keyed by network. A
+          payer's wallet can use these to recognise the facilitator, and they
+          are published here rather than hard-coded so a facilitator rotation
+          needs no client change.
+        example:
+          'eip155:42220':
+            - '0x0d74D5Cefd2e7F24E623330ebE3d8D4cB45fFB48'
+  verifyResponse:
+    type: object
+    description: >
+      The facilitator's verification result, passed through unchanged. `isValid`
+      is the field that answers the question; a `false` here is a successful
+      verification of an invalid payment, and is returned as `200`.
+    properties:
+      isValid:
+        type: boolean
+        description: Whether the payment is well-formed and correctly signed.
+        example: true
+      invalidReason:
+        type: string
+        description: >
+          Present when `isValid` is `false`. One of the x402 error codes —
+          `insufficient_funds`, `invalid_exact_evm_payload_signature`,
+          `invalid_network`, `invalid_scheme` and so on.
+        example: insufficient_funds
+      invalidMessage:
+        type: string
+        description: A human-readable explanation, when the facilitator gives one.
+      payer:
+        type: string
+        description: The account the facilitator identified as paying.
+        example: '0x4f3Edf983aC636A65A842Ce7c78D9Aa706D3b113'
+  settleResponse:
+    type: object
+    description: >
+      The x402 settle response, with x402Go's own accounting attached under
+      `settlement`. `success` is the only reliable indicator that something
+      moved — `transaction` is present but empty on a failure, as the
+      specification requires.
+    properties:
+      success:
+        type: boolean
+        description: >
+          Whether the payment settled. `true` only when the facilitator
+          affirmatively reported success.
+        example: true
+      transaction:
+        type: string
+        description: >
+          The settlement transaction hash, or `''` when nothing moved.
+        example: '0x9c1f0e6f1d2a4b7c8e5f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f'
+      network:
+        type: string
+        description: The network the payment was made on, as the request named it.
+        example: 'eip155:42220'
+      payer:
+        type: string
+        description: The account that signed the payment.
+        example: '0x4f3Edf983aC636A65A842Ce7c78D9Aa706D3b113'
+      amount:
+        type: string
+        description: >
+          The gross amount that was settled, as a string of integer atomic
+          units. Present on a successful settlement.
+        example: '1002000'
+      errorReason:
+        type: string
+        description: >
+          Present when `success` is `false`. Either the facilitator's own
+          reason code, or `settlement_pending_reconciliation` when the outcome
+          is unknown.
+        example: settlement_pending_reconciliation
+      errorMessage:
+        type: string
+        description: A human-readable explanation, when there is one.
+      duplicate:
+        type: boolean
+        description: >
+          `true` when this request recognised an existing settlement rather than
+          creating one. The money is the same either way; this is what lets a
+          caller tell "I settled this" from "this was already settled".
+        example: false
+      settlement:
+        $ref: '#/definitions/settlementRecord'
+  settlementRecord:
+    type: object
+    description: >
+      The accounting record for this payment. **All amounts are integer strings
+      in the asset's atomic units** — never numbers, and never decimals — because
+      an 18-decimal token amount does not survive a float. Divide by the token's
+      decimals at the point of display, never before.
+    properties:
+      settlementId:
+        type: string
+        description: >
+          A deterministic hash of the signed authorization. The idempotency key:
+          the same payment always produces the same value.
+        example: '3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a'
+      status:
+        type: string
+        description: >
+          `pending` while in flight; `settled` once the facilitator confirmed;
+          `failed` when nothing moved and nothing will; `pending_reconciliation`
+          when the outcome is unknown and a human has to look.
+        enum:
+          - pending
+          - settled
+          - failed
+          - pending_reconciliation
+        example: settled
+      network:
+        type: string
+        description: >
+          The canonical chain key, not the spelling the request used, so one
+          chain cannot appear under two names.
+        enum:
+          - celo
+          - celoSepolia
+        example: celo
+      chainId:
+        type: integer
+        description: The EIP-155 chain id.
+        example: 42220
+      asset:
+        type: string
+        description: The token contract the payment was denominated in.
+        example: '0xcebA9300f2b948710d2653dD7B07f33A8B32118C'
+      payer:
+        type: string
+        description: The account that signed the payment.
+        example: '0x4f3Edf983aC636A65A842Ce7c78D9Aa706D3b113'
+      payTo:
+        type: string
+        description: >
+          Where the payment was addressed. Equal to the merchant's vault, which
+          was resolved from the API key rather than from the request.
+        example: '0x4f3Edf983aC636A65A842Ce7c78D9Aa706D3b113'
+      grossAmount:
+        type: string
+        description: What the payer signed. The sum of the three below.
+        example: '1002000'
+      merchantAmount:
+        type: string
+        description: >
+          What the merchant is owed, and the only figure that counts towards
+          their balance. Always greater than zero.
+        example: '1000000'
+      x402GoFee:
+        type: string
+        description: x402Go's fee — $0.001, in atomic units.
+        example: '1000'
+      facilitatorFee:
+        type: string
+        description: The Celo facilitator's fee — $0.001, in atomic units.
+        example: '1000'
+      totalFee:
+        type: string
+        description: The two fees summed — $0.002. What the payment had to exceed.
+        example: '2000'
+      x402Version:
+        type: integer
+        example: 2
+      scheme:
+        type: string
+        example: exact
+      nonce:
+        type: string
+        description: The authorization's replay-prevention nonce.
+        example: '0x1111111111111111111111111111111111111111111111111111111111111111'
+      transactionHash:
+        type: string
+        description: The settlement transaction hash. Present once settled.
+        example: '0x9c1f0e6f1d2a4b7c8e5f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f'
+      blockNumber:
+        type: integer
+        description: >
+          The block the settlement landed in, when the facilitator volunteers
+          one. Usually absent: the settle schema has no block number, and it is
+          left unset rather than fetched, since the hash is enough to find it.
+      failureReason:
+        type: string
+        description: Why it failed or is unresolved, when it is. A code, never a stack.
+        example: insufficient_funds
+      createdAt:
+        type: string
+        format: date-time
+        description: When the `pending` record was written — before Celo was called.
+      settledAt:
+        type: string
+        format: date-time
+        description: When the facilitator confirmed it. Absent until then.
+  facilitatorError:
+    type: object
+    description: >
+      The error envelope used across this API. Only `message` is sent: the
+      internal `code` and any diagnostic `details` are for logs and tests, and
+      no message ever names a credential or an internal address.
+    properties:
+      message:
+        type: string
+        example: The payment is not addressed to this merchant’s vault.

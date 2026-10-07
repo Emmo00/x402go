@@ -5,6 +5,7 @@ import UsersRoute from './routes/users.route';
 import AuthRoute from './routes/auth.route';
 import AccountRoute from './routes/account.route';
 import ApiKeysRoute from './routes/apiKeys.route';
+import FacilitatorRoute from './routes/facilitator.route';
 import PayoutRoute from './routes/payout.route';
 import validateEnv from './utils/validateEnv';
 
@@ -17,6 +18,7 @@ const app = new App([
   new AccountRoute(),
   new ApiKeysRoute(),
   new PayoutRoute(),
+  new FacilitatorRoute(),
 ]);
 
 app.listen();

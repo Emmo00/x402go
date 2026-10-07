@@ -2,6 +2,7 @@ import { getAddress, type Address, type Hex } from 'viem';
 import { X402_VAULT_ABI } from '../abi';
 import { chainByKey, type ChainKey } from '../config';
 import { getPublicClient, type ChainClientProvider } from '../utils/chainClient';
+import type { ContractWrite } from '../utils/transaction';
 
 /**
  * Reads of a single X402Vault, plus the transaction shapes for the writes that
@@ -123,6 +124,10 @@ export class VaultService {
    * but a caller assembling them from separate sources is where that mistake
    * would come from, so the lengths are checked here too rather than paying a
    * gas fee to be told.
+   *
+   * `msg.sender` is the factory's operator, and both legs — the merchant's
+   * share and the fee — move in this one call. There is no partial withdrawal
+   * to fall back on, so the amounts are the whole decision.
    */
   public buildWithdrawRequest(
     chain: ChainKey,
@@ -130,13 +135,7 @@ export class VaultService {
     tokens: readonly Address[],
     merchantAmounts: readonly bigint[],
     feeAmounts: readonly bigint[],
-  ): {
-    chainId: number;
-    to: Address;
-    abi: typeof X402_VAULT_ABI;
-    functionName: 'withdraw';
-    args: readonly [readonly Address[], readonly bigint[], readonly bigint[]];
-  } {
+  ): ContractWrite {
     if (tokens.length !== merchantAmounts.length || tokens.length !== feeAmounts.length) {
       throw new Error(
         `withdraw arrays must be the same length: ${tokens.length} tokens, ` +
@@ -145,8 +144,7 @@ export class VaultService {
     }
 
     return {
-      chainId: chainByKey(chain).chainId,
-      to: getAddress(vault),
+      address: getAddress(vault),
       abi: X402_VAULT_ABI,
       functionName: 'withdraw',
       args: [tokens, merchantAmounts, feeAmounts] as const,
@@ -168,16 +166,9 @@ export class VaultService {
     newPayout: Address,
     deadline: bigint,
     signature: Hex,
-  ): {
-    chainId: number;
-    to: Address;
-    abi: typeof X402_VAULT_ABI;
-    functionName: 'changePayout';
-    args: readonly [Address, bigint, Hex];
-  } {
+  ): ContractWrite {
     return {
-      chainId: chainByKey(chain).chainId,
-      to: getAddress(vault),
+      address: getAddress(vault),
       abi: X402_VAULT_ABI,
       functionName: 'changePayout',
       args: [newPayout, deadline, signature] as const,

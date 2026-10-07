@@ -24,8 +24,13 @@ export type ChainClientProvider = (chain: ChainKey) => PublicClient;
  *
  * `nativeCurrency` is CELO on both: Celo Sepolia is a Celo testnet, so its gas
  * token is CELO too, not a faucet token.
+ *
+ * Exported because the signing side needs the same chain object and must not
+ * build a second one: a wallet client pointed at a chain that disagreed with
+ * the one the reads use would sign against the wrong id, which is the kind of
+ * bug that only shows up as a rejected transaction on mainnet.
  */
-function toViemChain(key: ChainKey): Chain {
+export function toViemChain(key: ChainKey): Chain {
   const config = CHAINS[key];
 
   return defineChain({

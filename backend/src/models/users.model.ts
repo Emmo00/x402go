@@ -46,6 +46,11 @@ const apiKeySchema = new mongoose.Schema<IApiKey>(
  * fact about the chain that changes without this document being written, so
  * storing it would create a value that is wrong the moment someone else
  * deploys. It is read from the chain on the requests that need it.
+ *
+ * The three deployment fields that follow are different in kind, which is why
+ * they are allowed: each is a record of an event that already happened, written
+ * once when the operator's transaction deployed the vault, and never a claim
+ * about the present. Nothing reads them to decide anything.
  */
 const vaultSchema = new mongoose.Schema<IVault>(
   {
@@ -61,6 +66,22 @@ const vaultSchema = new mongoose.Schema<IVault>(
     createdAt: {
       type: Date,
       required: true,
+    },
+
+    // Set only by the deployment path, and only for a vault this backend
+    // deployed itself — a vault deployed by the merchant directly, or found
+    // already deployed, has no transaction of ours to record.
+    transactionHash: {
+      type: String,
+      required: false,
+    },
+    blockNumber: {
+      type: Number,
+      required: false,
+    },
+    deployedAt: {
+      type: Date,
+      required: false,
     },
   },
   {
