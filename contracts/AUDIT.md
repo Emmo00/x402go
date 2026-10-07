@@ -1,898 +1,674 @@
-# x402Go Smart Contract Security Audit
+# x402Go Smart Contract Security Audit — Post-Blueprint
 
-> **STATUS — HISTORICAL SNAPSHOT.** This report describes the contracts *as they were at the time of the
-> audit* (`withdrawAll`, operator-supplied `feeRecipient`, no operator-change event, 138 tests). **It has
-> not been rewritten.** The findings below are the record of what was wrong then, and several have since
-> been fixed; the code, the tests and `.gas-snapshot` now describe a different contract. Read this document
-> for the *reasoning*, not for the current interface. Name mapping for anything you find here:
->
-> | Name in this report | Current name |
-> | --- | --- |
-> | `X402Vault.withdrawAll(tokens, merchantAmounts, feeAmounts, feeRecipient)` | `X402Vault.withdraw(tokens, merchantAmounts, feeAmounts)` — the `feeRecipient` parameter is gone; the fee leg always goes to the immutable factory |
-> | `X402VaultFactory(owner)` + `setOperator` | `X402VaultFactory(owner, operator)` — operator is a constructor argument, and `setOperator` rejects `address(0)` |
-> | `changePayout(newPayout, signature)` | `changePayout(newPayout, deadline, signature)` |
-> | *(no operator event existed)* | `X402VaultFactory.OperatorChanged(previousOperator, newOperator)` |
-> | *(no fee-withdrawal path existed)* | `X402VaultFactory.withdrawFees(tokens, feeRecipient)`, owner-only |
->
-> Fix status, for the record: C-01 (operator-chosen fee sink) — **fixed**, the recipient is now immutable
-> and structural. H-03 (zero operator bricks withdrawals) — **fixed at the rotation entry point**; the
-> constructor still accepts zero, which the tests now document rather than assert as correct. M-06
-> (payout-redirection blindness) — **partly fixed**, `PayoutChanged` and `OperatorChanged` are now emitted.
-> C-02, M-04, and the settlement-accounting findings remain **open by design** — the blueprint places
-> accounting off-chain.
+**Date:** 2026-10-07
+**Scope:** `contracts/src/**`, `contracts/script/**`, `contracts/test/**`, `contracts/foundry.toml`, and the x402Go backend/frontend as they relate to on-chain settlement.
+**Artifacts:** `X402Vault.sol` (4,021 B runtime), `X402VaultFactory.sol` (3,182 B runtime), `IX402VaultFactory.sol`, `DeployX402VaultFactory.s.sol`, 167 tests.
 
-**Scope:** `contracts/src/X402Vault.sol`, `contracts/src/X402VaultFactory.sol`, `contracts/src/interfaces/IX402VaultFactory.sol`, `contracts/script/DeployX402VaultFactory.s.sol`, `contracts/test/**`, and their integration with the x402Go backend.
+**Predecessor:** `AUDIT-pre-blueprint.md` audits the *previous* revision (`withdrawAll`, operator-supplied `feeRecipient`, no operator event). Several of its findings are fixed here; this report re-derives everything against the current bytecode rather than inheriting conclusions. **Finding IDs are not comparable between the two files** — each audit numbers its own findings, and both happen to contain a `C-01`. Where this report refers to the predecessor it says so explicitly.
 
-**Commit:** `3c999c7` plus uncommitted NatSpec-only edits to the two `src/` files (verified: `git diff` shows 19 inserted comment lines, no logic change).
+**Finding IDs** encode severity: `C-` Critical, `H-` High, `M-` Medium, `L-` Low, `I-` Informational. 23 findings in total.
 
-**Dependency note:** the brief refers to "OpenZeppelin dependencies" and "OpenZeppelin ECDSA utilities". **This project does not use OpenZeppelin.** All primitives come from **Solady** (`lib/solady/`, remapped as `solady/`). Findings below were verified against the vendored Solady source, not against OpenZeppelin's behaviour; where the two differ in a way that matters, that is called out explicitly (see L-05 and the answers to Q3/Q7).
+**Method:** full source review of both contracts; review of all 167 tests and the gas snapshot; review of the vendored Solady primitives actually reached (`LibClone`, `SignatureCheckerLib`, `SafeTransferLib`, `EIP712`, `Ownable`) with the exact code paths quoted; a survey of the backend and frontend for any on-chain integration; inspection of the Foundry broadcast artifact; a size-differential build to test EVM-version assumptions. **No contract, test, or script was modified during this audit** — the only writes were: preserving the previous report as `AUDIT-pre-blueprint.md`, and writing this file.
 
-**Method:** full source review, review of all 138 existing tests, review of the vendored Solady primitives actually reached by the code, a survey of the backend for the documented settlement flow, and six executable proofs-of-concept. Every finding marked *Confirmed* was reproduced against a live EVM; the PoC file was deleted after the run and the repository is byte-identical to its prior state.
+---
+
+## 0. The brief's premises vs. the code as it actually is
+
+Four premises in the brief do not hold. Each changes an answer, so they are stated up front rather than buried.
+
+| Brief says | Reality | Consequence |
+| --- | --- | --- |
+| "OpenZeppelin dependencies", "OpenZeppelin ECDSA utilities" | **No OpenZeppelin anywhere.** `remappings.txt` and `lib/` contain only `solady/` and `forge-std/`. Verified: zero matches for `openzeppelin` in `src/`, `test/`, `script/`, `foundry.toml`, `remappings.txt`. | Audit target is **Solady v0.1.26** (`v0.1.26-36-g2afba69`). Materially, Solady's signature checker **does not enforce low-s**, where OZ's `ECDSA.recover` does. See M-04. |
+| Requirement 6 / area 10: "`withdrawAll`" | Renamed to **`withdraw(tokens, merchantAmounts, feeAmounts)`** before this audit. `withdrawAll` appears nowhere in code, tests, or `.gas-snapshot`. | Audited under its current name. |
+| Requirement 7 / area 2: "signature from the **previous payout address**" | The contract verifies **`merchant()`** — the address baked into the clone's immutable args — permanently. `payout()` is a separate mutable value and never signs. | **Requirement 7 is not met as written.** The client has since confirmed the merchant is the intended signer, so the *implementation* is correct and the *requirement* is stale. This is a hard fork in the threat model: the merchant key is a permanent, non-revocable authority over every future payout (M-03). |
+| Area 4: "the backend calculates grossAmount, merchantAmount, x402GoFee, facilitatorFee" | **The backend calculates nothing.** There is no x402 middleware, handler, or paywall; no 402 response; no chain client, RPC URL, contract address, or ABI; and `grossAmount`, `merchantAmount`, `x402GoFee`, `facilitatorFee`, `recordSettlement` occur **zero times** outside the previous audit document. | "Consistency with the backend architecture" is currently **vacuous — there is nothing to be consistent with.** The split exists only as operator-supplied calldata. See H-04. |
+
+`recordSettlement()` **does not exist**. There is no on-chain accounting of any kind, so the brief's question about it minting balances is answered below in the negative — with the caveat that the *absence* is the finding.
 
 ---
 
 ## 1. Executive summary
 
-The contracts are small, cleanly written, and unusually well tested at the unit level — 138 tests, 10,000 fuzz runs each, gas-snapshotted, with genuinely thoughtful coverage of signature edge cases, token quirks, and reentrancy. The clone architecture is correct and the EIP-712 implementation is textbook-quality: per-vault domain, chain-ID binding, and replay nonces all verified working.
+The vault mechanics are the strongest part of this codebase and are, in isolation, well built. The clone architecture is textbook: `merchant` is immutable in clone bytecode, `FACTORY` is immutable in the implementation so one operator rotation reaches every vault, the address is args-bound CREATE2 and therefore cannot be squatted, and initialization is atomic with deployment. The EIP-712 layer is correct — per-vault domain, chain-ID binding, deadline, and a consumed nonce. The 167-test suite is disciplined, and the pre-blueprint audit's critical finding (its own C-01: the operator naming an arbitrary fee sink) is genuinely fixed by making the fee leg structurally unreachable by the operator.
 
-**The problem is not the code quality. It is that there is no security model for the money.**
+**The problem is no longer where money goes. It is who decides whether it leaves at all, and where it lands the first time.**
 
-`withdrawAll` is a stateless, operator-only function that transfers caller-supplied amounts to a caller-supplied `feeRecipient`. The contract keeps **no record of what belongs to the merchant and what belongs to x402Go**. The split is asserted entirely in calldata. A single compromised — or merely malicious — operator key can therefore move **100% of any vault's balance to any address, at any time, with no signature from the merchant and nothing on chain to contradict it**. This is not a subtle bug; it is the declared design, and it is confirmed by a passing proof-of-concept.
+Two Critical/High paths remain, and both are consequences of the same design choice — that the **operator chooses the payout at vault creation** and the **operator alone decides the split and timing of every withdrawal**:
 
-Three further structural problems compound it:
+1. **The operator can steal a merchant's funds outright.** The operator may call `createVault(victim, attackerPayout)`. `initPayout` then runs *inside* that call, and because `payout()` is what `withdraw` pays, every subsequent withdrawal routes the merchant's money to the attacker. The vault address is public and predictable (`vaultOf`), so payments can be flowing into it before the merchant ever learns it exists. This is not a subtle composition — it is three ordinary calls.
+2. **The operator can confiscate the merchant's funds without naming a payout at all**, by setting `merchantAmounts[i] = 0` and `feeAmounts[i] = balance`. The whole balance goes to the factory, reachable only by the owner. From the merchant's side the loss is identical.
 
-- The backend that is supposed to compute the split **does not exist**. `grossAmount`, `merchantAmount`, `x402GoFee`, `facilitatorFee` and `recordSettlement` appear **nowhere in the repository** — not in code, not in types, not in schemas, not even in prose. There is no chain client, no RPC URL, no contract address, and no EIP-712 signing anywhere in the backend. The `OPERATOR_KEY` the backend requires to boot is validated and then never read by a single line of code. The vault is entirely unwired.
-- The payout-change rule in the brief ("a valid signature from the previous payout address") is **not what the contract does**. It verifies the *merchant*, permanently. The author's own NatSpec agrees with the code, so this is a requirements divergence rather than a coding slip — but it means a browser-hot merchant key keeps forever the power to redirect every future payout.
-- The operator can **create a vault for any merchant with an attacker-chosen payout**, and the deterministic address means the merchant's own creation then reverts with `VaultExists`.
+Both are unaffected by the immutable fee recipient, because neither needs to *redirect* fees — the fee leg is a legitimate destination that the operator controls the *size* of.
 
-Also worth stating plainly, because it is easy to miss: **there is no `withdrawAll` path that a merchant can invoke.** A merchant cannot recover their own funds. If the operator key is lost, the owner key is lost, or `setOperator(address(0))` is ever called, every vault's balance is frozen forever with no recovery function.
+Underneath both sits a structural gap: **the contract has no idea what any merchant is owed.** It keeps no balance, records no settlement, and validates no split. It transfers exactly the two arrays it is handed. The invariant `grossAmount = merchantAmount + x402GoFee + facilitatorFee` is enforced nowhere — not on chain, and not in the backend, which has no settlement code at all. Solvency and correctness are therefore properties of the operator's honesty, not of the contract.
 
-**Verdict: not safe to hold real funds in its current form.** The fix is architectural, not a patch — see §5. Everything else in this report is secondary to that.
+There is also no merchant exit. A merchant has no function they can call to recover their own funds. If the operator stops cooperating, the funds sit in the vault indefinitely; the owner can rotate the operator, but if the owner key is lost or `renounceOwnership()` is called, they are frozen permanently.
 
-### What is genuinely good
-
-Recording these so the fixes do not regress them:
-
-- `LibClone.cloneDeterministic` with immutable args, `FACTORY` as a true immutable, deterministic CREATE2 addresses, and a pre-check that avoids burning all gas on a collision (`X402VaultFactory.sol:37-40`).
-- EIP-712 domain correctly binds `address(this)` (the clone) and `block.chainid`; Solady caches the separator and invalidates on chain-ID or address change. Cross-vault, cross-factory and cross-chain replay are all genuinely blocked, and the test suite proves each.
-- Solady's `SignatureCheckerLib` returns `false` for `signer == address(0)` (`SignatureCheckerLib.sol:85`), so the classic `ecrecover`-returns-zero forgery is **not** reachable despite `merchant()` being able to yield a non-zero garbage value on the implementation contract.
-- `SafeTransferLib.safeTransfer` rejects false-returning, reverting, *and* codeless "tokens" (`SafeTransferLib.sol:346-350`), so a bogus token address cannot silently no-op a withdrawal.
-- Payout and nonce packed into one slot; `payout()` read once before the loop; calldata arrays; custom errors; the zero-amount legs skipped so that zero-transfer-reverting tokens cannot brick a batch.
+**Verdict: the vault and signature layers are sound; the money model is not. As deployed today, "merchant funds are safe from the operator" is false, and there is nothing on chain to contradict anything the operator does.** The single highest-value change is one line of intent — the operator must never be able to choose a payout for someone else's vault.
 
 ---
 
 ## 2. Overall security assessment
 
-| Dimension | Rating | Note |
-|---|---|---|
-| Access control on withdrawals | **Critical** | Operator-gated, but the operator is unconstrained in *destination* and *amount* |
-| Separation of merchant funds from fees | **Absent** | No balances, no ledger; the distinction exists only in calldata |
-| Payout-change authorization | **High risk** | Works, but authorizes the wrong key relative to spec; no expiry |
-| Replay protection | **Good** | Nonce + chainId + verifyingContract all correct and tested |
-| Signature verification | **Good** | EOA + ERC-1271 + EIP-2098; zero-signer guarded. Malleable (by design, harmless here) |
-| ERC-20 handling | **Good** | SafeTransferLib; atomic batches; the vault cannot be tricked into a bad transfer |
-| Clone / minimal-proxy architecture | **Good, two gaps** | Correct pattern; no one-shot init guard, no implementation protection |
-| Operator-compromise blast radius | **Total loss** | The stated requirement (#9) is not met in any measure |
-| Observability | **Poor** | No events on payout change, withdrawal, or operator rotation |
-| Backend integration | **Non-existent** | Nothing computes or submits anything |
-| Test quality | **High** | Excellent unit coverage; misses every issue in this report |
-
-**The single sentence that matters:** the contract's security boundary is "trust the operator completely", and the brief's requirements (#9, #10) ask for "trust the operator as little as possible". The gap between those two positions is the whole audit.
+| Property | Status |
+| --- | --- |
+| Clone isolation between merchants | **Sound.** One vault per merchant, args-bound salt, no cross-vault write path. |
+| Initialization safety | **Sound.** Factory-gated and atomic with deployment; no race, no squatting. |
+| Payout-redirect resistance (post-creation) | **Sound.** Only the merchant key can move `payout`; the operator and owner cannot. |
+| Signature scheme (binding, replay, expiry) | **Sound.** Per-vault domain, chain ID, new payout, nonce, deadline. |
+| Signature uniqueness (malleability) | **Weak.** High-s twins and EIP-2098 forms are accepted; the nonce makes it harmless, but a signature is not a unique identifier. |
+| Operator cannot redirect merchant funds | **Broken at creation time.** The operator picks the payout when it creates the vault. |
+| Operator cannot take merchant funds | **False.** Two independent paths (C-01, H-02). |
+| Merchant can always recover own funds | **False.** No merchant-callable path exists. |
+| On-chain accounting enforced | **Absent by design.** No record, no bound, no validation. |
+| Fee destination immutable *within a vault* | **Sound.** Structural, not a parameter. |
+| Fee destination at the factory | **Owner-chosen at sweep time**, and **unlogged**. |
+| Atomicity of a withdrawal | **Sound.** One loop, one transaction, any failure reverts everything. |
+| Token-handling safety | **Sound at the transfer layer** (Solady rejects no-code, false-returning and reverting tokens), **unbounded at the policy layer** (no allowlist). |
+| Reentrancy | **No exposure today** — there is no state to corrupt. The risk is latent and arrives with any on-chain accounting. |
+| DoS resistance | **Weak.** The operator can censor withdrawals indefinitely; nobody else can act. |
+| Deployment readiness | **Blocked.** `evm_version` unpinned and the default build emits Cancun-era opcodes; the recorded Celo artifact is for the previous factory. |
 
 ---
 
 ## 3. Findings
 
-Severity counts: **2 Critical, 4 High, 6 Medium, 6 Low, 6 Informational.**
+### C-01 — Critical — The operator can create a merchant's vault with an arbitrary payout and drain every payment to it
 
----
+**Affected:** `X402VaultFactory.createVault` (`X402VaultFactory.sol:33-54`), `X402Vault.initPayout` (`X402Vault.sol:49-54`), `X402Vault.withdraw` (`X402Vault.sol:92-111`).
 
-### C-01 — Operator can drain any vault to an arbitrary address, with no merchant signature
+**Description.** `createVault(merchant, payout)` authorizes `msg.sender == operator` and accepts **any** `payout` for **any** `merchant`:
 
-**Severity:** Critical — *Confirmed with a live PoC*
-**Affected:** `X402Vault.withdrawAll` (`X402Vault.sol:68-89`), specifically the `feeRecipient` parameter at `:72` and the fee leg at `:87`
+```solidity
+if (msg.sender != merchant && msg.sender != operator) revert Unauthorized();
+...
+if (payout != merchant) X402Vault(vault).initPayout(payout);   // :51
+```
 
-**Description.** `feeRecipient` is a free per-call parameter supplied by the operator, and `feeAmounts[i]` is unconstrained calldata. There is no recorded fee balance to draw against. The operator can therefore construct a call in which the merchant's leg is zero and the entire vault balance is labelled "fees" and sent to the operator's own address.
+The operator then calls `initPayout` on the vault it just created, with no merchant involvement. The vault's `withdraw` pays `payout()`:
+
+```solidity
+address to = payout();                                        // :100
+address m = merchant();
+if (mAmount != 0) SafeTransferLib.safeTransfer(token, to, mAmount);
+```
+
+The vault address is deterministic and *published before creation*: `vaultOf(merchant)` is a `view` function that works on undeployed addresses, and it is the natural thing for a backend to poll.
 
 **Attack scenario.**
+1. Operator (compromised key) computes `v = factory.vaultOf(victim)` — a public, deterministic address.
+2. Operator calls `factory.createVault(victim, attackerPayout)`. Passes the `operator` check; `initPayout(attackerPayout)` runs inside the same transaction.
+3. Payments for `victim` land in `v` — either because the backend had already provisioned `payTo = v`, or because the operator is the party that tells the backend which address to use.
+4. Operator calls `X402Vault(v).withdraw([token], [balance], [0])`. Every token goes to `attackerPayout`.
+5. The merchant's only defence is to call `changePayout` with their own key *before* step 4 — but nothing tells them the vault exists, and the operator controls the timing.
+
+**Impact.** Total, irreversible loss of all merchant funds in that vault. The attacker needs only the operator key; the owner key is not required.
+
+**Why the current implementation is vulnerable.** Payout authority is *initialized by the party that may be an attacker*. The merchant signature requirement exists only on the *change* path (`changePayout`), never on the *creation* path. `createVault` conflates two different privileges: "create the vault" (a convenience the platform legitimately performs on a merchant's behalf) and "choose where the merchant's money goes" (a privilege that must never be the platform's).
+
+**Recommended fix.** Do not let the operator choose a payout for someone else's vault. The minimal change:
 
 ```solidity
-// Attacker holds the operator key. The vault holds 1,000,000 USDC of merchant funds.
-vm.prank(operator_attacker);
-vault.withdrawAll(
-    [USDC],        // token
-    [0],           // merchantAmounts  -> merchant gets nothing
-    [1_000_000e6], // feeAmounts       -> "fees"
-    attacker       // feeRecipient     -> attacker's own address
-);
-// 1,000,000 USDC now sits at `attacker`. The merchant received 0.
+if (msg.sender == merchant) {
+    // self-service: any payout, the merchant authorized it by calling
+} else {
+    // operator: only the merchant's own address may be the initial payout
+    if (payout != merchant) revert Unauthorized();
+}
 ```
 
-This PoC was compiled and executed against `X402Vault` as written. Result:
+A vault whose payout differs from the merchant then requires the merchant's own `changePayout` signature, which is already implemented and already correct. If operator-provisioned custom payouts are genuinely needed at onboarding, require a merchant EIP-712 signature over the initial payout — reusing `CHANGE_PAYOUT_TYPEHASH` with `nonce == 0` works, since `initPayout` is one-shot and a signature for `nonce 0` is exactly a signature for the initial state.
 
-```
-[PASS] test_A01_operatorDrainsEverythingToArbitraryAddress()
-  attacker balance : 1000000000000000000000
-  merchant balance : 0
-  vault balance    : 0
-```
-
-**Impact.** Total, irreversible loss of all merchant funds across every vault the operator can reach — i.e. the entire platform's float, in a single transaction. There is no on-chain signal that anything is wrong, because (see M-02) the vault emits no events.
-
-**Why this implementation is vulnerable.** Not a coding error — a missing invariant. The contract has no concept of "the merchant's balance", so it cannot check that `merchantAmounts[i]` is the merchant's money and `feeAmounts[i]` is x402Go's. `SafeTransferLib.safeTransfer` correctly prevents the transfer *failing*; nothing prevents it being *wrong*. The `feeRecipient == address(0)` check at `:75` is the only validation the destination ever receives.
-
-**Recommended fix.** The destination must stop being a parameter. Two changes, both required:
-
-1. Make the fee recipient **immutable** (set at factory construction, or an owner-controlled state variable on the factory that vaults read), so the operator cannot choose where fees go.
-2. Introduce a recorded balance per token — `merchantBalance[token]` and `feeBalance[token]` — credited by an operator-attested settlement function, and **cap both legs by the recorded balances**:
-   ```solidity
-   uint256 m = merchantAmounts[i];
-   uint256 f = feeAmounts[i];
-   if (m > merchantBalance[token]) revert InsufficientBalance();
-   if (f > feeBalance[token])     revert InsufficientBalance();
-   merchantBalance[token] -= m;
-   feeBalance[token]     -= f;
-   if (m != 0) SafeTransferLib.safeTransfer(token, to, m);            // to = payout()
-   if (f != 0) SafeTransferLib.safeTransfer(token, FEE_RECIPIENT, f); // not a parameter
-   ```
-   This does not stop a compromised operator from *over-reporting* settlements (see C-02), but it stops it redirecting funds that are already recorded as the merchant's — which is the blast-radius reduction requirement #9 demands. Combined with the fee-rate enforcement in §5, the operator's maximum theft becomes a bounded fraction rather than 100%.
-
-**Test to add:** yes — a regression test asserting that `withdrawAll` with `feeAmounts` exceeding `feeBalance` reverts, and that the fee leg can only ever reach the configured fee address. The A01 PoC above inverts directly into the regression.
+**Test to add:** yes, and it is the most important test in this report. A test that plays the five steps above end-to-end and asserts the funds **cannot** reach `attackerPayout` — i.e. that step 2 reverts.
 
 ---
 
-### C-02 — No settlement accounting exists anywhere; the documented split is unenforceable
+### H-01 — High — The operator can confiscate 100% of a vault's balance into the fee pool
 
-**Severity:** Critical
-**Affected:** `X402Vault` (whole accounting model); the backend (absent)
+**Affected:** `X402Vault.withdraw` (`X402Vault.sol:92-111`).
 
-**Description.** The specified invariant is `grossAmount = merchantAmount + x402GoFee + facilitatorFee`. Nothing in this repository implements, records, or enforces it. An exhaustive repository survey establishes (occurrences outside this report):
-
-| Symbol | Occurrences in the codebase |
-|---|---|
-| `grossAmount` | **0** |
-| `x402GoFee` | **0** |
-| `facilitatorFee` | **0** |
-| `recordSettlement` | **0** |
-| `merchantAmount` (singular) | **0** |
-
-The plural `merchantAmounts`/`feeAmounts` exist only as `withdrawAll` parameters, and they are caller-supplied. **The contract does not compute the split, and neither does the backend.**
-
-**Attack scenario.** Not an exploit — a category error. There is nothing to attack because there is nothing to verify. An operator that simply passes wrong numbers is indistinguishable from one that passes right ones.
-
-**Impact.** (a) Merchants have no on-chain evidence of what they are owed. (b) A dispute is unresolvable — the chain records only the transfers, not the entitlement. (c) The blast radius of an operator compromise is unbounded (C-01). (d) `feeAmounts` may be silently less than what x402Go is owed, and no reconciliation is possible.
-
-**Why this implementation is vulnerable.** The architecture places the entire ledger off-chain and gives the on-chain component no role beyond executing transfers. That is a defensible choice *only* if the off-chain component is trusted and the on-chain component enforces the parts that need enforcing — the destination, the cap, and the fee rate. None of those are enforced.
-
-**Recommended fix.** Add the minimal on-chain ledger described in §5: an operator-attested `recordSettlement` that credits per-token merchant/fee balances, and withdrawals capped by those balances. Two design warnings:
-
-- Because the operator authors the settlement amounts, `recordSettlement` **must not increase any balance beyond tokens actually held by the vault**. Otherwise the operator can mint claims out of nothing and then drain real funds belonging to other merchants. Cap credits by observed balance, or better, credit from *observed inflow*: have the vault reconcile `tokenBalance(token)` against `merchantBalance + feeBalance` and treat any surplus according to a fixed rule. A settlement report that could exceed holdings must revert.
-- Do not let `recordSettlement` be the *only* check. If the operator can write any numbers, then the ledger is only as trustworthy as the operator — which is why the fee *rate* must be enforced in code (§5) rather than asserted.
-
-**Test to add:** yes — the split invariant (`gross == merchant + x402GoFee + facilitatorFee`), plus a test that a settlement report exceeding the vault's actual holdings reverts.
-
----
-
-### H-01 — `changePayout` authorizes the merchant forever, not the current payout address
-
-**Severity:** High — *Confirmed with a live PoC*
-**Affected:** `X402Vault.changePayout` (`X402Vault.sol:49-61`), specifically `merchant()` at `:55`
-
-**Description.** The brief requires the payout to be changeable "only with a valid signature from the previous payout address". Line 55 verifies against `merchant()` instead. Once the payout has been moved to a new address, that new address **has no authority at all**, while the original merchant retains it permanently.
-
-**Attack scenario (confirmed).**
-
-```
-merchant sends ChangePayout -> payout moves to P
-P signs ChangePayout(third, nonce=1)   -> REVERTS InvalidSignature
-merchant signs ChangePayout(third, nonce=1) -> SUCCEEDS
-```
-
-The consequence with a compromised merchant key: the merchant identity in this system is the **SIWE sign-in wallet** (`backend/src/controllers/auth.controller.ts`), i.e. a browser hot wallet used routinely. An attacker who obtains it can, at any point in the vault's life, sign a `ChangePayout` to their own address; the next operator withdrawal pays every merchant-leg transfer to the attacker. The merchant's ceremony of "moving payout to a treasury/custody address" provides no protection, because it never removed the hot key's authority.
-
-**Impact.** Silent redirection of all future merchant payouts following a hot-key compromise. Not a fund-loss bug in the absence of compromise — but it fails the stated requirement and destroys a defense-in-depth property the spec was clearly designed to provide.
-
-**Why this implementation is vulnerable.** The NatSpec at `X402Vault.sol:46-48` ("Can only be called by the merchant", "@param signature The signature of the merchant") and the backend comment at `backend/src/services/payout.service.ts:21-22` ("an EIP-712 ... signature from the vault's merchant") both agree with the code. **The divergence is between the brief and the implementation, and it must be resolved by a decision, not a patch.**
-
-**Recommended fix.** Pick one, deliberately:
-
-- *(a) Follow the brief:* verify against `payout()` instead of `merchant()`. Consequence: authority transfers with the address; the merchant permanently loses control after the first change; and if the payout address is a hot wallet, its compromise is immediately fatal with no recovery. Also note this makes the **first** change impossible to authorize from the merchant's perspective unless `payout() == merchant()` is the initial state — which it is, so it works, but the semantics must be documented carefully.
-- *(b) Keep merchant authority (recommended)* and correct the brief. Add a mitigant for the hot-key concern: a `deadline` (M-01), and optionally a two-step handoff where the *new* payout address must also accept, so a silent redirection requires compromising two keys.
-
-If (b) is chosen, say so explicitly in the spec, because the frontend onboarding currently implies the merchant's wallet controls the payout and users will infer (a).
-
-**Test to add:** yes — whichever semantics are chosen, a test asserting that the *other* key is rejected, in both directions. The A02 PoC is the (b)-shaped version.
-
----
-
-### H-02 — Operator can pre-empt a merchant's vault with an attacker-chosen payout
-
-**Severity:** High — *Confirmed with a live PoC*
-**Affected:** `X402VaultFactory.createVault` (`X402VaultFactory.sol:30-47`), authorization at `:32`, `initPayout` call at `:44`
-
-**Description.** `createVault` is authorized by `msg.sender == merchant || msg.sender == operator`. When called by the operator, **the `merchant` and `payout` arguments are both free**. Because vault addresses are deterministic and single-shot (`VaultExists` at `:38-40`), an operator that creates a vault for a victim first claims that victim's only possible vault address — permanently bound to a payout of the operator's choosing.
-
-**Attack scenario (confirmed).**
+**Description.** Every element of both amount arrays is caller-supplied and unvalidated. There is no cap, no ratio, no recorded entitlement, and no relationship between the two legs:
 
 ```solidity
-// Attacker holds the operator key. Victim has not onboarded yet.
-vm.prank(operator_attacker);
-address v = factory.createVault(victim, attackerControlledPayout);
-// v == factory.vaultOf(victim)  -- the victim's one and only vault address
-// X402Vault(v).payout() == attackerControlledPayout
-
-// The victim now tries to create their own vault:
-vm.prank(victim);
-factory.createVault(victim, victim);  // REVERTS VaultExists
+uint256 mAmount = merchantAmounts[i];
+uint256 f = feeAmounts[i];
+if (mAmount != 0) SafeTransferLib.safeTransfer(token, to, mAmount);
+if (f != 0) SafeTransferLib.safeTransfer(token, FACTORY, f);
 ```
 
-Because `payout != merchant`, line 44 calls `initPayout` and writes the hostile payout directly into storage — **bypassing the signature and nonce model entirely**. The victim's funds then settle into a vault whose withdrawals pay the attacker.
+**Attack scenario.** Operator calls `withdraw([usdc], [0], [vaultBalance])`. The entire balance transfers to the factory. The merchant receives nothing. The funds are then held by the factory, where only the owner can release them via `withdrawFees`.
 
-**Impact.** (a) All merchant-leg withdrawals for that merchant go to an attacker-chosen address. (b) The victim cannot create a correct vault — they are reduced to signing a `ChangePayout` after noticing. (c) It is a clean griefing primitive against any address, at the operator's discretion, before or during onboarding.
+**Impact.** The merchant loses access to 100% of their funds. Unlike C-01 the destination is a known, owner-controlled address rather than an attacker address, so this is *appropriable* if the owner is honest and responsive — it is a confiscation rather than a theft. **In a small-team deployment where the operator and owner keys are held by the same party — the likely production arrangement — this collapses into C-01-level severity.** Note also that the fee leg is *legitimate*: nothing in the calldata is malformed, so no monitoring based on transaction shape can flag it. Only a human comparing the merchant's expected payout against their actual one would notice.
 
-**Why this implementation is vulnerable.** Two independent choices combine badly: (i) the operator may name an arbitrary `merchant` *and* an arbitrary `payout` on someone else's behalf; and (ii) vault creation is single-shot per merchant, so being first is decisive. Either alone is survivable; together they hand the operator a first-mover advantage over every merchant.
+**Why the current implementation is vulnerable.** Making the fee *destination* immutable fixed where fees can go; it did nothing about *how much* can be declared as a fee. The operator's control over the split is the residual, and it is unlimited.
 
-**Recommended fix.** Remove the operator's freedom over `payout`. Concretely, either:
+**Recommended fix.** Bound the fee leg. Any of:
+- a per-vault immutable or owner-set `maxFeeBps` enforced as `feeAmounts[i] * 10_000 <= (merchantAmounts[i] + feeAmounts[i]) * maxFeeBps`;
+- an owner-set absolute per-token ceiling;
+- an on-chain entitlement record (see §5.3) so `withdraw` is bounded by a recorded balance rather than by calldata;
+- most simply and most robustly, **a merchant-signed split** — the merchant signs `(vault, token, merchantAmount, feeAmount, nonce, deadline)` and the operator merely submits it. That reuses the machinery `changePayout` already has and makes the operator structurally unable to misstate the split.
 
-- **Always** create with `payout = merchant` and delete the `payout` parameter — the only way to a different payout is then a signed `changePayout` (which H-01 decides who may sign). This is the simplest correct fix and makes `initPayout`'s payout-bypass unreachable.
-- Or keep the parameter but require `msg.sender == merchant` whenever `payout != merchant`, so the operator can only ever create the default-payout vault.
-
-**Test to add:** yes — that `createVault` by the operator for a third-party merchant either reverts or always yields `payout() == merchant`.
-
----
-
-### H-03 — `initPayout` is an unguarded, un-evented privileged setter that bypasses the signature model
-
-**Severity:** High
-**Affected:** `X402Vault.initPayout` (`X402Vault.sol:41-44`), called from `X402VaultFactory.sol:44`
-
-**Description.** `initPayout` writes `_payout` for any address, at any time, with no restriction beyond `msg.sender == FACTORY`. It:
-
-- does **not** check whether the vault is already initialized (no one-shot guard);
-- does **not** bump or consult `nonce`;
-- emits **no event**;
-- requires **no signature from anyone**;
-- overwrites an existing payout unconditionally.
-
-Today the factory calls it from exactly one place (`createVault`, on a freshly deployed clone), so **it is not currently exploitable**. But it is a live, external, admin-only write path to the most security-sensitive variable in the contract, reachable by the factory forever.
-
-**Attack scenario.** There is no exploit today. The risk is prospective and severe: any future factory function that forwards to `initPayout` — a migration helper, a "fix payout" admin function, a batch operation, an upgrade — becomes an **instant, signature-free takeover of every vault**, with no event to notice it by and no nonce to invalidate it. This is exactly the class of latent privilege that audits exist to remove.
-
-**Impact.** Latent. Enables total, silent redirection of all payouts if the factory ever exposes a forwarding path. Also note the test suite *asserts* the factory can call it on the implementation contract (`X402VaultFactory.t.sol:38-46`, `test_constructor_implementationIsBoundToFactory`), cementing the behaviour as intended.
-
-**Why this implementation is vulnerable.** The initialization pattern is incomplete. A clone's one-time initializer should be idempotent-guarded and should be impossible to invoke after setup.
-
-**Recommended fix.** In order of preference:
-
-1. **Remove `initPayout` entirely** and pass the initial payout through the clone's immutable args (`abi.encodePacked(merchant, payout)`), letting `payout()` fall back to the arg rather than storage. This deletes the privileged path and the storage write. Note this requires `payout()` to read a second clone arg, and H-02's fix must be applied so the operator cannot choose it.
-2. If it must stay, make it strictly one-shot and observable:
-   ```solidity
-   function initPayout(address p) external {
-       if (msg.sender != FACTORY) revert Unauthorized();
-       if (_payout != address(0)) revert AlreadyInitialized();  // one-shot
-       _payout = p;
-       emit PayoutChanged(address(0), p, 0);                     // observable
-   }
-   ```
-   Note the one-shot guard interacts with the current "skip when `payout == merchant`" optimisation at `X402VaultFactory.sol:44`: if `_payout` stays `address(0)`, a later `initPayout` would still be permitted, so the guard alone is not sufficient unless the sentinel is changed (e.g. initialize to `merchant()` explicitly, or use a separate `initialized` flag).
-
-**Test to add:** yes — that a second `initPayout` on an already-initialized clone reverts, and that no caller other than the factory can ever set the payout.
+**Test to add:** yes — `withdraw` with `merchantAmount = 0` and `feeAmount = fullBalance` must revert, or (if a cap is adopted) must be clamped.
 
 ---
 
-### H-04 — Clearing the operator permanently freezes every vault; there is no merchant withdrawal path
+### H-02 — High — No merchant-callable withdrawal: the operator can censor indefinitely, and key loss is permanent
 
-**Severity:** High — *Confirmed with a live PoC*
-**Affected:** `X402VaultFactory.setOperator` (`X402VaultFactory.sol:56-58`), `X402Vault.withdrawAll` (`X402Vault.sol:74`)
+**Affected:** `X402Vault.withdraw` (operator-gated, `X402Vault.sol:95`); absence of any merchant path.
 
-**Description.** `withdrawAll` is gated solely on `IX402VaultFactory(FACTORY).operator()`. `setOperator` has **no zero-address check** (unlike `createVault`, which validates both its addresses). Setting the operator to `address(0)` — through a mistake, a rotation gone wrong, a compromised owner, or a lost owner key — makes `msg.sender != address(0)` true for every caller, so `withdrawAll` reverts for everyone, permanently. `renounceOwnership()` produces the same terminal state, as the project's own test documents (`X402VaultFactory.t.sol:321`, `test_ownership_renounceBricksSetOperatorButKeepsOperator`).
+**Description.** The only entity that can move money out of a vault is `IX402VaultFactory(FACTORY).operator()`. A merchant has no function to recover their own funds. The owner's `setOperator` is the only recovery lever, and `renounceOwnership()` destroys it.
 
-Crucially, **there is no alternative path**: a merchant cannot withdraw their own funds under any circumstance, even with a perfectly functioning operator and owner. The merchant — the party whose money it is — has no function they can call.
+**Attack scenario / failure modes.**
+- *Censorship:* a compromised or merely unavailable operator simply never calls `withdraw`. Merchant funds accumulate and are unreachable. There is no time-based escape hatch, no challenge window, no merchant override.
+- *Loss:* the operator key is lost. Recovery requires the owner to call `setOperator`. If the owner key is also lost — or if `renounceOwnership()` was called (permitted by Solady `Ownable`, `renounceOwnership` at `Ownable.sol:185-188`, which sets the owner slot to zero with no guard) — **every vault's balance is frozen forever.** The project's own test `test_ownership_renounceBricksOwnerActionsButKeepsOperator` documents the trigger.
+- *Compromise of the owner instead:* the owner rotates in an attacker operator, who then executes C-01 or H-01. `OperatorChanged` is now emitted, which gives monitoring a hook, but there is no timelock — the rotation and the drain can be in the same block.
 
-**Attack scenario (confirmed).**
+**Impact.** Reachable-permanent loss of all merchant funds with no on-chain recourse, from either a single unavailable key or a single governance mistake.
 
-```
-owner calls setOperator(address(0))
-operator  -> withdrawAll : REVERTS Unauthorized
-merchant  -> withdrawAll : REVERTS Unauthorized
-owner     -> withdrawAll : REVERTS Unauthorized
-=> 500e18 tokens remain in the vault with no code path that can ever move them
-```
+**Why the current implementation is vulnerable.** The design gives the merchant *authority over configuration* (payout) but *no authority over money*. Those two are decoupled in a way that leaves the merchant with no exit.
 
-**Impact.** Permanent, total loss of access to all funds in all vaults. Not theft — destruction. Also a live operational hazard: `setOperator` is the routine rotation operation, and a single zero-value mistake is unrecoverable.
+**Recommended fix.** Give the merchant an unconditional exit that does not depend on the operator, the owner, or the backend. Concretely: a merchant-callable `withdrawToPayout(token, amount)` bounded by an on-chain recorded merchant balance (§5.3), or — if accounting stays off-chain — a `sweepToPayout(token)` callable by the merchant after a configurable inactivity period. Pair with a two-step, timelocked `setOperator` (request/accept with a delay) so a compromised owner cannot install a thief and drain in one transaction. At minimum, document that losing the owner key is equivalent to losing all funds.
 
-**Why this implementation is vulnerable.** Withdrawal authority is a single point of failure with no fallback, and the setter that controls it permits an unusable value.
-
-**Recommended fix.**
-
-1. Add a zero-address check to `setOperator` (`if (newOperator == address(0)) revert InvalidAddress();`) — the factory already has the error defined and uses it in `createVault`. Add an `OperatorChanged` event while here (M-02).
-2. **Add a merchant escape hatch.** The merchant is the vault's owner; they should always be able to recover their own funds. Even a simple `withdrawToMerchant(tokens)` gated on `msg.sender == merchant()` — sending to `payout()` — bounds the damage of a lost operator key from "total loss" to "operational inconvenience". This is the single highest-value change after C-01.
-3. Consider whether `renounceOwnership` should be disabled on the factory; with an immutable `implementation` and the operator in storage, renouncing permanently removes the ability to rotate the operator, which is itself a security control.
-
-**Test to add:** yes — that `setOperator(address(0))` reverts, and that the merchant can always recover funds with the operator unset.
+**Test to add:** yes — a test asserting the merchant can recover their recorded balance with the operator key revoked/unavailable.
 
 ---
 
-### M-01 — `ChangePayout` signatures never expire and are permissionlessly relayable
+### H-03 — High — The settlement split is unverifiable on chain, and the backend that should compute it does not exist
 
-**Severity:** Medium
-**Affected:** `X402Vault.changePayout` (`X402Vault.sol:49-61`); typehash at `:14`
+**Affected:** `X402Vault.withdraw`; the entire backend.
 
-**Description.** The signed struct is `ChangePayout(address newPayout, uint256 nonce)` — no `deadline`, no `chainId` in the struct (the domain covers chain ID, correctly), no vault-specific field (the domain covers the vault, correctly). The nonce prevents replay, but **nothing bounds a signature's lifetime**. A signed payout change remains executable until its nonce is consumed, which may be never. `test_changePayout_anyoneCanRelayMerchantSignature` confirms any third party may submit it, by design.
+**Description.** The contract has no `recordSettlement`, no balance mapping, no gross/net computation, and no validation of the split. Verified by exhaustive search: `grossAmount`, `merchantAmount`, `x402GoFee`, `facilitatorFee`, `recordSettlement` occur **zero times** anywhere in `backend/` or `frontend/` outside the previous audit document. There is no x402 middleware or paywall; no route returns 402; the backend's complete surface is `Index`, `Auth`, `ApiKeys`, `Payout`, and an empty `UsersRoute`. `OPERATOR_KEY` is *required* by `src/utils/validateEnv.ts` so the server refuses to boot without it, and is then **never read by any line of code** — there is nothing for it to sign with, because no chain client exists. `CELO_FACILITATOR_API_KEY` is likewise set and referenced nowhere.
 
-**Attack scenario.** A merchant signs a `ChangePayout` to a new address, then changes their mind (or the destination turns out to be wrong, or the signature is phished from a signature-request UI). The signature sits in a wallet history, an email, a support ticket, or the mempool. Weeks later, anyone who holds it can execute it — still valid, because the nonce is untouched. It can also be front-run: if the merchant wants to move to Y but an attacker holds a stale signature for X, the attacker submits X first, consuming nonce *n*; the merchant's Y-signature (signed at nonce *n*) is now permanently invalid and they must re-sign at *n+1*.
+**Impact.** The intended invariant `grossAmount = merchantAmount + x402GoFee + facilitatorFee` holds nowhere. Every withdrawal is an unverifiable assertion. Errors — an off-by-one, a stale nonce, a mis-scaled decimal, a duplicated settlement — are undetectable on chain and leave no record to reconcile against. The only "verification" available is trusting the same party that could benefit from getting it wrong.
 
-**Impact.** Enables delayed, unexpected payout redirection from a leaked or stale signature; a griefing vector on pending changes. Requires a signature to leak, so it is a defense-in-depth gap rather than a direct vulnerability.
+This is the finding that makes H-01 and H-03-in-the-token-sense dangerous rather than theoretical: with no ledger, there is no diff to detect an over-charge, and no way to prove one occurred after the fact.
 
-**Why this implementation is vulnerable.** Nonce-based replay protection is necessary but not sufficient; standard practice (EIP-2612, Permit2, and every mature EIP-712 authorization) pairs a nonce with an expiry.
+**Why the current implementation is vulnerable.** Accounting was deliberately moved off chain (a legitimate choice for gas), but nothing replaced the on-chain check with an off-chain one: there is no settlement model, no ledger, no reconciliation, and no test.
 
-**Recommended fix.** Extend the struct:
-```solidity
-bytes32 private constant CHANGE_PAYOUT_TYPEHASH =
-    keccak256("ChangePayout(address newPayout,uint256 nonce,uint256 deadline)");
-// ...
-if (block.timestamp > deadline) revert SignatureExpired();
-```
-The domain already supplies the vault address and chain ID, so no extra fields are needed for those. This *does* change the digest, so the backend (whenever it is written) and the frontend must sign the new struct — coordinate the rollout. See also L-05 on canonicality.
+**Recommended fix.** Choose one and make it explicit rather than implicit:
+- **On chain (bounded trust):** add an operator-writable `recordSettlement(token, merchantAmount, feeAmount)` that *increments* recorded entitlements, and bound `withdraw` by them. This does not stop a malicious operator from minting entitlements — so it must be paired with a bound (M-cap on fees) or with merchant-signed settlements to be meaningful. It does, however, make withdrawn-vs-recorded auditable and makes the merchant's balance publicly readable.
+- **Off chain (explicit trust):** build the ledger in the backend, and have the withdrawal flow *verify post-conditions* — read `vault.tokenBalance(token)` and recipient balances before and after, and reconcile against the recorded entitlement delta before marking the settlement final. Then the contract is a dumb pipe and the backend is the system of record, which must be stated as a trust assumption (§4).
 
-**Test to add:** yes — a signature with `deadline < block.timestamp` must revert; a signature must remain valid exactly at the boundary.
+Either way: do not ship a payment path where the only evidence of correctness is the operator's own transaction.
+
+**Test to add:** yes — the invariant test in §6.1.
 
 ---
 
-### M-02 — No events on payout change, withdrawal, or operator rotation
+### H-04 — High — No token allowlist; fee-on-transfer and rebasing tokens silently break the ledger
 
-**Severity:** Medium — *Confirmed with a live PoC*
-**Affected:** `X402Vault.changePayout`, `X402Vault.withdrawAll`, `X402Vault.initPayout`; `X402VaultFactory.setOperator`
+**Affected:** `X402Vault.withdraw`, `X402VaultFactory.withdrawFees`.
 
-**Description.** The only event in the entire contract set is `VaultCreated` (`X402VaultFactory.sol:18`). A `recordLogs()` capture across a payout change and a full withdrawal shows **zero** logs emitted by the vault:
+**Description.** Any address can be passed as `tokens[i]`. Solady's `safeTransfer` (verified, `SafeTransferLib.sol:336-354`) is a strong transfer-layer guard: it reverts `TransferFailed()` when the token has **no code**, returns a word other than `1`, or reverts; it accepts a token returning no data (USDT-style). That closes the "EOA pretending to be a token" and "returns false" classes. It cannot close the following:
 
-```
-[PASS] test_A05_noEventsOnPayoutChangeOrWithdrawal()
-  vault emitted a log -> false  (only the token's own Transfer events appeared)
-```
+- **Fee-on-transfer tokens.** The vault is debited the full amount; the recipient receives less. The contract cannot tell. Every settlement denominated in such a token is wrong by the fee, and the error compounds. There is no on-chain record, so the drift is invisible (H-03).
+- **Rebasing tokens.** The vault's balance changes between the moment the backend computes the split and the moment the transaction executes. The split is then stale — in the deflationary direction this makes `withdraw` revert atomically (safe), in the inflationary direction it under-withdraws and leaves dust that must be reconciled.
+- **Tokens with unusual decimals.** No on-chain consequence, but a 6-vs-18 mix-up produces a 10^12 error that nothing on chain will catch.
+- **Conforming-but-malicious tokens.** A token that returns `true` without moving value passes every check. The only defence is to never accept it.
+- **Rebasing/hook tokens with callback surface.** A token may call back into the vault during `transfer`; see L-04 for why this is currently harmless.
 
-**Attack scenario.** The C-01 drain is silent. A payout redirection is silent. An operator rotation is silent. There is no on-chain record a merchant, an indexer, a monitoring service, or an incident responder can watch. Detection depends entirely on a merchant manually comparing balances — which, given there is no `withdrawAll` they can call and no balance view exposing entitlements, they cannot do.
+**Impact.** Silent, systematic mis-accounting of merchant funds with no on-chain detection path. In the malicious case, a vault can be drained relative to its ledger.
 
-**Impact.** (a) Drains and redirections cannot be detected on chain. (b) The backend cannot reconstruct history for a merchant-facing ledger, which the frontend's `Overview.jsx` placeholder expects. (c) Incident response is impossible without replaying every transfer. This is a security finding, not a cosmetic one: unobservable privileged actions are how long-lived compromises persist.
+**Why the current implementation is vulnerable.** The transfer layer is hardened but the *policy* layer is absent. "Which tokens may this system hold" is a decision the contract never makes and the backend never records.
 
-**Why this implementation is vulnerable.** Events were simply not written. Note the contract is otherwise disciplined about gas, so the cost objection is weak.
+**Recommended fix.** Add an owner-managed token allowlist on the factory, enforced in `withdraw` and `withdrawFees` (`if (!factory.isAllowed(token)) revert TokenNotAllowed()`). Explicitly document the token assumptions the system relies on: standard ERC-20 semantics, no transfer fee, no rebase, 18 or 6 decimals only, and — for the accounting to hold — that `transfer` moves exactly the requested amount. Reject anything else at allowance time rather than discovering it at settlement.
 
-**Recommended fix.** Add, at minimum:
-```solidity
-event PayoutChanged(address indexed previousPayout, address indexed newPayout, uint256 nonce);
-event Withdrawn(address indexed token, address indexed to, uint256 merchantAmount, uint256 feeAmount, address indexed feeRecipient);
-event OperatorChanged(address indexed previousOperator, address indexed newOperator);
-event SettlementRecorded(address indexed token, uint256 merchantAmount, uint256 feeAmount);
-```
-Index the fields an indexer must filter on (merchant, token, recipient). Emit `PayoutChanged` from `initPayout` too, so H-03's bypass would at least be visible.
-
-**Test to add:** yes — `vm.expectEmit` on each new event, including the `initPayout` path.
+**Test to add:** yes — a fee-on-transfer mock asserting the documented behaviour (that the recipient receives less than the amount, and that the backend must therefore verify post-conditions), plus an allowlist rejection test.
 
 ---
 
-### M-03 — `facilitatorFee` cannot be paid to a separate recipient
+### M-01 — Medium — `withdrawFees` emits no event: fee outflows are unmonitorable
 
-**Severity:** Medium
-**Affected:** `X402Vault.withdrawAll` (`X402Vault.sol:68-89`)
+**Affected:** `X402VaultFactory.withdrawFees` (`X402VaultFactory.sol:64-73`).
 
-**Description.** The specified model has **two** fee components — `x402GoFee` and `facilitatorFee` — which are distinct parties' revenue. The contract accepts one `feeAmounts` array and one `feeRecipient`, so a single withdrawal cannot pay both. Whatever the backend does, one of the two parties must be settled by a separate transaction, or the two fees must be conflated into one recipient (in which case someone is trusted to forward the other's share).
+**Description.** The vault→factory fee leg is logged via `Withdrawn(merchant, token, merchantAmount, feeAmount)`. The factory→treasury leg — the one that moves actual value out of the system — emits nothing. There is no `FeesWithdrawn(address[] tokens, address feeRecipient, uint256[] amounts)` event.
 
-**Attack scenario.** If the fees are conflated and forwarded, the operator can simply never forward the facilitator's share — the same C-01 freedom, applied to a third party. If they are settled separately, the two withdrawals race for the same balance with no accounting to arbitrate (M-04).
+**Impact.** An indexer cannot reconstruct fee flows. An incident responder cannot tell whether fees were swept, when, or where. Combined with the fact that `feeRecipient` is an owner-supplied parameter chosen at sweep time, a compromised owner key can drain all accumulated fees **in a single unlogged transaction**. The pre-blueprint audit's M-06 ("state changes with no event") was fixed for vault creation, payout change, operator rotation, and withdrawal — this is the remaining hole.
 
-**Impact.** The documented fee model is unimplementable as written; a revenue-sharing partner's funds are exposed to the operator in exactly the way C-01 describes.
+**Why the current implementation is vulnerable.** The function was added without the event that every other state-changing function has.
 
-**Why this implementation is vulnerable.** The parameter list was designed for a two-way split; the spec grew to three-way without the contract following.
+**Recommended fix.** Emit `FeesWithdrawn(tokens, feeRecipient, amounts)` per call, mirroring `Withdrawn`'s granularity. Consider also making `feeRecipient` an immutable set in the constructor, removing the owner's ability to choose the destination at sweep time entirely — that is the same structural fix that closed C-01 in the previous revision.
 
-**Recommended fix.** Generalise to N recipients, or add an explicit second recipient:
-```solidity
-address[] calldata feeRecipients,   // [x402Go, facilitator]
-uint256[][] calldata feeAmounts     // or a flat array with an offset
-```
-Simpler and probably better: since both are x402Go-side revenues, set **both** as immutables on the factory, so neither is operator-chosen, and let the backend settle them separately against recorded balances (C-02). Confirm with the team which is intended.
-
-**Test to add:** yes — once the shape is decided, assert each recipient receives exactly its share and that no caller-supplied address can divert either.
+**Test to add:** yes — `vm.expectEmit` on the sweep, including the zero-balance and multi-token cases.
 
 ---
 
-### M-04 — Withdrawal amounts are computed against a live balance with no snapshot
+### M-02 — Medium — `evm_version` is unpinned and the default build emits Cancun-era opcodes
 
-**Severity:** Medium
-**Affected:** `X402Vault.withdrawAll` (`X402Vault.sol:68-89`), `tokenBalance` (`:91-93`)
+**Affected:** `contracts/foundry.toml`.
 
-**Description.** With no ledger (C-02), the operator must derive `merchantAmounts`/`feeAmounts` by reading `tokenBalance(token)` off-chain and splitting it. Between that read and the transaction landing, anything can change the real balance: a new x402 settlement arrives, an earlier withdrawal from another operator process confirms, or a rebasing token adjusts balances.
+**Description.** `foundry.toml` sets no `evm_version`, so the build targets solc 0.8.28's default. Building the identical sources with `FOUNDRY_EVM_VERSION=paris` produces **different, larger** bytecode (X402Vault 4,115 B vs 4,021 B; X402VaultFactory 3,253 B vs 3,182 B), which demonstrates that the default build is emitting opcodes unavailable before Cancun (the size *reduction* is the signature of a multi-byte sequence collapsing into a single opcode such as `MCOPY`).
 
-**Attack scenario.** Two operator processes (or a retry after a timeout) both read `balance = 1000`, both compute `merchant = 900, fee = 100`, and both submit. The first succeeds; the second reverts with `TransferFailed` — funds are safe, but observe the inverse case: if a settlement lands *between* the read and the tx, the operator withdraws based on a stale, smaller balance, and the new settlement's fee portion sits unwithdrawn and unaccounted until someone notices. With fee-on-transfer or rebasing tokens, the vault's balance never equals the sum of the recorded entitlements, so the off-chain ledger drifts permanently and unreconcilably.
+**Impact.** If the target chain does not support the built-for revision, the contracts hit an invalid opcode at runtime. On a chain that *does* support it, the risk is nil — but the build is not self-documenting, and a future `foundry.toml` or toolchain change can silently move the target. A vault or factory that deploys successfully but reverts on first `withdraw` or `changePayout` is the worst failure mode available: funds received, then unreachable.
 
-**Impact.** Persistent reconciliation drift between the (nonexistent on-chain, off-chain-only) ledger and reality; a fee leg that silently under-withdraws; retries that revert. No direct theft, but it makes the accounting untrustworthy — which is the whole point of C-02's fix.
+**Why the current implementation is vulnerable.** The EVM target is inherited from a compiler default rather than declared. The broadcast artifact confirms the target is **Celo (chain ID 42220)**; the supported revision must be confirmed against Celo rather than assumed from solc.
 
-**Why this implementation is vulnerable.** Balance-derived accounting is inherently racy; entitlements must be *recorded*, not *recomputed*.
+**Recommended fix.** Confirm the target chain's supported revision, then pin it explicitly (`evm_version = "cancun"`, or `"paris"` — the paris build compiles cleanly, so that is a viable fallback with no source changes). Add a CI job that builds with the pinned version and runs the suite, so the pin is enforced rather than aspirational.
 
-**Recommended fix.** This resolves itself once C-02 is fixed: with `merchantBalance`/`feeBalance` recorded per token, withdrawals decrement recorded entitlements instead of re-deriving them from a balance, and the operation becomes idempotent and order-independent. Additionally: (a) decide and document a policy for fee-on-transfer/rebasing tokens — the safest is to **not support them**, since `safeTransfer` cannot detect them; (b) treat any surplus balance over recorded entitlements as an explicit reconcilable state rather than silently sweeps.
-
-**Test to add:** yes — a token that takes a transfer fee, asserting the behaviour is the documented one (revert or explicit surplus), and a test that two sequential partial withdrawals against recorded balances sum correctly.
+**Test to add:** yes — a CI build/test under the pinned EVM version. Also a post-deploy smoke test on the target chain that exercises `createVault` → `initPayout` → `changePayout` → `withdraw`, since an opcode mismatch appears at first execution rather than at deployment.
 
 ---
 
-### M-05 — Withdrawals cannot distinguish a token that lies about success
+### M-03 — Medium — The merchant key is a permanent, non-revocable payout authority
 
-**Severity:** Medium
-**Affected:** `X402Vault.withdrawAll` (`X402Vault.sol:86-87`)
+**Affected:** `X402Vault.changePayout` (`X402Vault.sol:62-80`).
 
-**Description.** `SafeTransferLib.safeTransfer` verifies that the call succeeded and returned `true` (or returned nothing, with code present). It cannot verify that tokens actually moved. A token whose `transfer` returns `true` without changing any balance — malicious or merely broken — passes every check.
+**Description.** The signer is `merchant()`, read from clone bytecode and therefore immutable for the vault's lifetime. There is no rotation, no delegation, no expiry, and no way to revoke. Once a merchant key touches `changePayout`, it holds the power to redirect every future payout forever. The brief's requirement 7 — that the *current payout address* authorize the change — would have made this a naturally decaying authority; the implementation, per the client's confirmation, does not do that.
 
-**Attack scenario.** The operator supplies a token address that reports success while moving nothing. The vault's books (once they exist) are decremented, the merchant is told they were paid, and no tokens moved. In a multi-token batch the other legs complete normally, so the batch looks successful.
+**Impact.** A merchant who signs from a browser hot wallet (which the frontend's onboarding flow actively encourages — `PayoutSetup.jsx` offers the connected wallet as the payout) exposes a permanent redirection capability from a key with the largest practical attack surface. Compromise of that key does not just lose current funds; it permanently redirects all future settlements, and the merchant cannot take the authority back — only the attacker's chosen payout can be overwritten *by the same compromised key*.
 
-**Impact.** Merchant under-payment that is undetectable on chain; corrupted accounting. Note the operator chooses the token list, so this is again within the operator-trust model rather than a separate escalation — but it means **the vault can never be the authority on whether a payment happened.**
+**Why the current implementation is vulnerable.** Authority is bound to an identity that can never be changed, with no compensating control.
 
-**Why this implementation is vulnerable.** An inherent ERC-20 limitation, not a code defect. `SafeTransferLib` is doing the right thing; ERC-20 simply provides no success guarantee.
+**Recommended fix.** Add merchant-controlled authority rotation: a `changeMerchant(newMerchant, deadline, signature)` gated on a signature from the *current* merchant, reusing the existing EIP-712 machinery. That converts a permanent compromise into a recoverable one, and it also gives the platform a clean answer to "what if the merchant's key is lost" (they re-onboard and the old vault is abandoned — which is honest, rather than pretending the key can be recovered). Additionally, bind the payout authority to a payout-specific key where possible, or document loudly that the merchant key must be a hardware or dedicated key, not the browser key.
 
-**Recommended fix.** Do not treat a successful `withdrawAll` as proof of settlement. Have the backend verify post-conditions: read `tokenBalance(vault)` and recipient balances before and after, and reconcile against the recorded entitlement delta. Combine with the allowlist recommendation in §5 — if only vetted tokens can be withdrawn, a lying token cannot enter the system. This is why the token allowlist is a correctness control, not just hygiene.
-
-**Test to add:** yes — a `LyingToken` that returns `true` and moves nothing, asserting the vault accepts it (documenting the limitation) and that the recommended backend post-check catches it.
+**Test to add:** yes — rotation succeeds with the current merchant's signature, fails without it, and the old merchant loses authority afterwards.
 
 ---
 
-### M-06 — Missing chain-ID/factory binding in the signed struct is fine, but the domain has no versioning path
+### M-04 — Medium — `changePayout` accepts malleable and compact signatures; a signature is not a unique identifier
 
-**Severity:** Medium
-**Affected:** `X402Vault._domainNameAndVersion` (`X402Vault.sol:95-97`), typehash at `:14`
+**Affected:** `X402Vault.changePayout` (`X402Vault.sol:72`).
 
-**Description.** The EIP-712 domain is `("X402Vault", "1")` with `address(this)` and `block.chainid` supplied by Solady. This is **correct** for replay protection — the test suite proves cross-vault, cross-factory, and cross-chain signatures are all rejected, and Solady invalidates its cached separator on chain-ID or address change (`EIP712.sol:292-297`). The gap is that nothing in the domain distinguishes **which version of the vault logic** a signature was intended for.
+**Description.** Verification is `SignatureCheckerLib.isValidSignatureNowCalldata(merchant(), digest, signature)`. Verified against the vendored source:
 
-**Attack scenario.** If vault logic is ever replaced — a new implementation address behind the factory, or a migrated factory — a signature produced for the old contract at the same address and chain would remain valid against the new logic if the domain string and struct shape are unchanged. A signature collected for one semantic meaning could authorize a different one.
+- **Low-s is not enforced.** The source header states it outright: *"This implementation does NOT check if a signature is non-malleable."* (`SignatureCheckerLib.sol:23`), and no `s <= secp256k1n/2` comparison exists in the function.
+- **EIP-2098 64-byte compact signatures are accepted** alongside 65-byte `(r,s,v)` (`:92-101`), so the same logical signature has at least two encodings.
+- Malleability is *neutralised*, not *prevented*: the nonce is consumed by whichever variant lands first, so the twin reverts. The suite tests exactly this (`test_changePayout_malleableTwinNeutralisedByNonce`).
 
-**Impact.** Latent. Only materialises if the implementation is ever upgraded or the struct is extended without changing the domain. The M-01 fix (adding `deadline`) changes the struct, which makes this concrete: **signatures produced before that change must not be valid after it.**
+**Impact.** No fund-loss path — the nonce carries the security. The impact is on everything that treats a signature as an identifier: off-chain deduplication, idempotency keys, "have I already processed this request" checks, and audit records. Two submissions of the same logical authorization look like two different signatures. Any backend that dedupes by signature bytes will mis-handle a retry. This is a correctness trap for the integration that does not exist yet, which is precisely when it is cheapest to fix.
 
-**Why this implementation is vulnerable.** Common and low-impact — the version string is a static "1" with no process behind it.
+**Why the current implementation is vulnerable.** Solady is a deliberate choice and a good one, but its signature checker is intentionally more permissive than OpenZeppelin's `ECDSA`, which rejects high-s. Substituting the library changes the malleability guarantee.
 
-**Recommended fix.** Treat the domain version as a schema version and bump it whenever the signed struct or the verification logic changes. For M-01 specifically, either bump to `("X402Vault", "2")` or accept that the struct change already invalidates old signatures (it does — the digest differs). Document the rule so it is followed next time. Include the factory address if vaults may ever be migrated between factories.
+**Recommended fix.** If uniqueness matters (and for an idempotent settlement API it does), add an explicit low-s check after recovery, or dedupe off chain by `(vault, nonce, deadline, newPayout)` rather than by signature bytes. Document the choice either way. Note that adding low-s enforcement is a ~50-gas check and removes a whole class of downstream reasoning.
 
-**Test to add:** yes — a signature generated for version "1" must not be accepted by a contract reporting version "2" (extends the existing `test_domain_sameMerchantSignatureCannotCrossFactories` pattern).
-
----
-
-### L-01 — One reverting or blocked token aborts the entire multi-token batch
-
-**Severity:** Low
-**Affected:** `X402Vault.withdrawAll` (`X402Vault.sol:82-88`)
-
-**Description.** All legs execute in one loop in one transaction; the first failure reverts everything. The test suite confirms this deliberately (`test_withdrawAll_secondTokenFailureRollsBackFirst`) and treats atomicity as a feature. It is — for safety. But it also means a single unusable token blocks the batch.
-
-**Attack scenario.** A settlement token with an address-level blocklist (USDC and USDT both have one) blocks the vault address. If the operator's off-chain logic uses a fixed token list, **every** withdrawal reverts — including for tokens that are perfectly fine. Funds are not lost, but the payout pipeline stalls entirely until the list is changed, and every gas cost is burned on reverting transactions.
-
-**Impact.** Liveness degradation, not loss — the operator controls the array and can simply omit the blocked token. Worth a mitigation because the natural backend implementation (iterate all supported tokens) has exactly this failure mode.
-
-**Why this implementation is vulnerable.** A single-transaction, all-or-nothing batch couples every token's fate to the worst-behaved one in the list.
-
-**Recommended fix.** Keep atomicity (it is the safe default and prevents half-settled states), but: (a) have the backend build the batch from tokens with a **nonzero recorded entitlement** rather than a static list, which shrinks the blast radius naturally once C-02 is fixed; and (b) consider a `withdrawAll` variant that skips a per-token failure and reports it, if operational needs demand it — but only alongside the accounting, so a skipped leg is recoverable rather than lost. Do **not** add skip-and-continue without accounting: it would silently under-pay.
-
-**Test to add:** yes — assert that a batch containing one blocked token reverts atomically **and** that omitting it succeeds, documenting the intended recovery.
+**Test to add:** yes — assert the current permissive behaviour explicitly (so a future low-s change is a deliberate, visible decision), and add the replay-across-encodings case.
 
 ---
 
-### L-02 — No reentrancy guard and no checks-effects-interactions discipline
+### M-05 — Medium — The two-leg withdrawal cannot express the documented three-way split
 
-**Severity:** Low today, **Critical the moment accounting is added**
-**Affected:** `X402Vault.withdrawAll` (`X402Vault.sol:82-88`)
+**Affected:** `X402Vault.withdraw`; architecture vs. brief item 3.
 
-**Description.** `withdrawAll` performs external calls in a loop with no `nonReentrant` modifier. This is **currently safe**, and the project's test `test_withdrawAll_reentrancyThroughTokenIsBlocked` proves why: a reentrant call from a token has `msg.sender == token`, which is not the operator, so it reverts `Unauthorized`. There is also no state to corrupt, so even a successful re-entry would accomplish nothing.
+**Description.** The brief's accounting model is `grossAmount = merchantAmount + x402GoFee + facilitatorFee` — four values. The contract accepts two (`merchantAmounts`, `feeAmounts`) and has exactly two destinations (`payout()`, `FACTORY`). `facilitatorFee` has no on-chain representation anywhere in the repository.
 
-That safety is incidental, not designed. The function also violates CEI in the sense that there are no effects at all — the pattern to copy for safety simply is not established in the code.
+**Impact.** The facilitator's share must be silently summed into the fee leg, and then re-split off chain after the factory sweep. That convention is enforced nowhere and recorded nowhere, and it is exactly the kind of implicit contract that breaks during an incident or a facilitator change. If the facilitator must be paid *directly* (a plausible requirement for a third-party facilitator with its own settlement expectations), the current contract cannot do it at all without a redeploy.
 
-**Attack scenario.** Today: none. After C-02 adds `merchantBalance[token] -= m`, a malicious token called in the merchant leg re-enters `withdrawAll` before the decrement lands, and drains again against the stale balance. The existing reentrancy test would not catch this, because it asserts the *old* failure mode (reverting via `Unauthorized`), and its mock does not attempt a re-entry as the operator.
+**Why the current implementation is vulnerable.** The destination model was designed for two parties and the business model has three.
 
-**Impact.** None now; total loss of the accounting invariant once state is introduced. This is a sequencing hazard: the fix for C-01 and C-02 is what creates it.
+**Recommended fix.** Decide and document explicitly: either (a) the facilitator is paid out of the fee leg post-sweep, and this is written down in the settlement spec and asserted in the backend's reconciliation, or (b) add a third leg. If (b), the cleanest shape keeps the current call ABI and adds an owner-configured immutable `facilitator` destination with a third amount array — but note this is an ABI change and a redeploy, so decide before mainnet rather than after.
 
-**Why this implementation is vulnerable.** Statelessness is currently the only defense, and the fix removes statelessness.
-
-**Recommended fix.** Add `ReentrancyGuard` (Solady ships one) **in the same change** that introduces accounting, and strictly follow CEI: decrement recorded balances *before* any `safeTransfer`. Do not add the guard alone and consider the matter closed — the CEI ordering is what actually protects the invariant.
-
-**Test to add:** yes — a token that re-enters `withdrawAll` as the operator (via a mocked operator call path) and asserts the recorded balance cannot be double-spent.
+**Test to add:** yes — a settlement test asserting the three-way identity holds in the backend's computation (not a contract test, per the off-chain-accounting decision, but a test somewhere must own it).
 
 ---
 
-### L-03 — Duplicate token addresses are accepted
+### M-06 — Medium — `renounceOwnership()` permanently destroys the operator-rotation and fee-withdrawal paths
 
-**Severity:** Low
-**Affected:** `X402Vault.withdrawAll` (`X402Vault.sol:82-88`)
+**Affected:** `X402VaultFactory` via Solady `Ownable` (`Ownable.sol:185-188`).
 
-**Description.** The same token may appear multiple times in `tokens`, each with its own amounts. The test suite asserts this works (`test_withdrawAll_sameTokenListedTwice`). It is not exploitable — the total must still fit the balance, and an over-draw reverts atomically — but it makes the batch harder to reason about and to reconcile, and it wastes gas on redundant external calls.
+**Description.** `renounceOwnership()` is inherited unmodified and sets the owner to `address(0)` with no guard. Afterwards `setOperator` and `withdrawFees` revert `Unauthorized()` forever. The suite documents the consequence (`test_ownership_renounceBricksOwnerActionsButKeepsOperator`).
 
-**Impact.** Confusion and gas, not loss. Combined with M-04's racy accounting it becomes one more way for the off-chain computation to diverge from what executed.
+**Impact.** Operator loss after renunciation is unrecoverable: no rotation is possible, so `withdraw` is dead for every vault, and fees already swept into the factory are stranded. This is a footgun that turns one key-loss event into total loss.
 
-**Recommended fix.** Either reject duplicates (`if (i != 0 && token <= tokens[i-1]) revert UnsortedTokens();` requires a sorted input and is the cheapest correct check) or document explicitly that duplicates are permitted and how they combine. If the accounting fix lands, duplicates are naturally harmless because decrements are bounded by recorded balances.
+**Why the current implementation is vulnerable.** Solady's `Ownable` offers `renounceOwnership` because most contracts want it; this contract's security model depends on the owner existing as a recovery path, so the default is wrong here.
 
-**Test to add:** only if the behaviour changes; the current test already documents it.
+**Recommended fix.** Override `renounceOwnership()` to revert, or gate it behind a two-step confirmation, and document that the owner key is a *liveness* dependency, not just a governance convenience. Consider whether ownership should be a multisig or a timelocked contract before mainnet, since it is the only recovery lever.
 
----
-
-### L-04 — `payout` may be set to any address, including a contract that cannot move tokens
-
-**Severity:** Low
-**Affected:** `X402Vault.changePayout` (`X402Vault.sol:49-61`); `createVault` (`X402VaultFactory.sol:31`)
-
-**Description.** The only validation on the destination is `!= address(0)`. `test_createVault_payoutCanBeAContract` explicitly permits a token contract as the payout address — funds sent there would almost certainly be unrecoverable. The vault itself is also a permitted value, which merely self-transfers.
-
-**Impact.** A merchant (or the operator, per H-02) can configure a payout that permanently loses funds on the next withdrawal. Self-inflicted or operator-inflicted; low severity because it requires setting a bad value.
-
-**Recommended fix.** Irreducible in general — the contract cannot know whether an address can move tokens. Mitigate off-chain: the `PUT /payout` endpoint already rejects `address(0)` (`backend/src/utils/payTo.ts`); extend that validation to warn on contract addresses, and prefer EOA or known-good multisig destinations. Definitely fix H-02 so the operator cannot choose this for a merchant.
-
-**Test to add:** no — the current behaviour is intentional and documented.
+**Test to add:** yes — assert `renounceOwnership()` reverts (once changed), and assert that `setOperator` + `withdraw` work after a rotation performed by a handover.
 
 ---
 
-### L-05 — Signatures are malleable; the nonce neutralises it, but a signature is not a unique identifier
+### M-07 — Medium — Constructor accepts `operator = address(0)`, producing a factory whose vaults nobody can withdraw from
 
-**Severity:** Low
-**Affected:** `X402Vault.changePayout` (`X402Vault.sol:55`)
+**Affected:** `X402VaultFactory` constructor (`X402VaultFactory.sol:22-26`).
 
-**Description.** Solady's `SignatureCheckerLib` **does not enforce low-s**, and says so at `SignatureCheckerLib.sol:23`: *"This implementation does NOT check if a signature is non-malleable."* The EOA path (`:98-105`) passes `(v, r, s)` straight to the `ecrecover` precompile with no half-order check, so for any valid signature `(r, s, v)` there is a second accepted signature `(r, n − s, v ^ 1)` recovering the same signer. The project's own test confirms this is real and accepted: `test_changePayout_malleableTwinCannotBeUsedToReplay` submits the twin and it **succeeds**.
+**Description.** `setOperator` correctly rejects `address(0)`, but the constructor does not validate. `new X402VaultFactory(owner, address(0))` deploys successfully. Every vault it creates is permanently unwithdrawable (`msg.sender != address(0)` is true for every caller) until the owner calls `setOperator`. The deploy script defaults `OPERATOR` to `address(0)`, so **the default deployment path produces exactly this factory**.
 
-This is *misleadingly named* — the twin does not "cannot be used", it is simply harmless because the nonce is consumed by whichever of the two lands first.
+**Impact.** Vaults can be created and funded before anyone notices; funds are frozen on arrival. The owner *can* repair it, so this is not permanent — it is a silent misconfiguration with a funding window in the middle.
 
-**Attack scenario.** No replay is possible: both forms share a digest, so the second submission fails on the nonce. The consequence is narrower — if anything ever treats a signature as a unique key (a dedup index, an idempotency key, a "has this been used" mapping keyed on signature bytes, an off-chain nonce cache), the two forms collide and defeat it. Note this differs from OpenZeppelin's `ECDSA`, which reverts on high-s; anyone porting OZ assumptions here will be wrong.
+**Why the current implementation is vulnerable.** Validation is present on the mutating path but omitted on the constructing path. The default in the script makes the bad value the easy path.
 
-**Impact.** No fund loss. A trap for future code that assumes canonical signatures.
+**Recommended fix.** Reject `address(0)` in the constructor, and make the deploy script *fail* rather than default when `OPERATOR` is unset (it is a required argument in every real deployment). Note that the previous revision's `test_setOperator_canBeCleared` treated an unset operator as a supported state; that state is no longer reachable through `setOperator`, so the constructor is the only remaining way to reach it — which is a good argument for closing it.
 
-**Recommended fix.** Either accept the malleability and document it — accurate, since the nonce is what protects replay — or enforce low-s for canonicality:
-```solidity
-if (uint256(s) > 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0) revert InvalidSignature();
-```
-which requires decoding the signature rather than passing the blob through. Given M-01 already changes the digest, this is a reasonable moment to add it. **Do not** describe the current code as having malleability protection; it does not.
-
-**Test to add:** yes, if low-s is enforced — the twin must revert. If not enforced, rename the existing test to state the actual property (the twin *is* accepted and is neutralised by the nonce), so it stops implying a guarantee that is not there.
+**Test to add:** yes — constructor with a zero operator reverts.
 
 ---
 
-### L-06 — Single-step factory ownership transfer
+### M-08 — Medium — Stale deployment artifact and key-handling mismatch in the deploy script
 
-**Severity:** Low
-**Affected:** `X402VaultFactory` (inherits Solady `Ownable`), exercised by `X402VaultFactory.t.sol:305-317`
+**Affected:** `contracts/broadcast/DeployX402VaultFactory.s.sol/42220/dry-run/run-latest.json`; `script/DeployX402VaultFactory.s.sol`.
 
-**Description.** `transferOwnership` is single-step (exercised by `X402VaultFactory.t.sol:288`, `test_ownership_directTransfer`). A typo in the new owner address, or a transfer to an address that cannot transact, permanently removes the ability to call `setOperator` — which, combined with H-04, means the operator can never be rotated or restored, and every vault's funds are frozen.
+**Description.** Two independent issues in the deployment path.
 
-**Impact.** Owner key management is the root of the entire operator system; a single fat-fingered transaction is unrecoverable. Note Solady *does* provide a two-step `requestOwnershipHandover`/`completeOwnershipHandover`, already tested at `X402VaultFactory.t.sol:302` (`test_ownership_twoStepHandover`) — so the safe pattern is available and simply not the documented path.
+1. **The recorded artifact is for the previous contract.** The dry-run on Celo (chain 42220) records a `X402VaultFactory` deployment whose constructor `arguments` array contains **one** address — the pre-blueprint 1-argument constructor. The current constructor takes two. Anyone re-broadcasting this artifact, or reading it to recover the deployed addresses, gets the old factory with an operator that can never be set at construction.
+2. **The script reads a raw private key from the environment while its own usage text says otherwise.** `vm.envUint("PRIVATE_KEY")` with `vm.startBroadcast(privateKey)`, while the usage block directly above says `--account <keystore-name>`. A raw key in an environment variable is exposed to process listings, shell history, `.env` files, and any child process; the documented keystore path never runs.
 
-**Recommended fix.** Standardise on the two-step handover for ownership changes and document it in the deploy runbook; consider overriding `transferOwnership` to revert in favour of the handover flow. Because the owner controls the operator — and the operator controls all funds until C-01 is fixed — ownership changes deserve ceremony.
+**Impact.** Either issue alone is a deployment incident: the first deploys or misrepresents the wrong bytecode, the second leaks the owner/deployer key. The deployer key is the most valuable key in the system at that moment — it becomes the factory owner, which controls operator rotation and fee withdrawal.
 
-**Test to add:** no new test needed; prefer enforcing the handover path in code or documenting it.
+**Why the current implementation is vulnerable.** The artifact predates the contract change; the script's documentation and implementation diverged.
 
----
+**Recommended fix.** Delete the stale `broadcast/` directory (it is simulated output for superseded code, and keeping it invites exactly this mistake), or regenerate it after the fix. Change the script to `vm.startBroadcast()` with no argument so it uses the `--account`/`--ledger` signer, and make `OPERATOR` a required variable. Deploy the factory from a hardware wallet or a keystore, and verify the deployed implementation address matches `factory.implementation()` on chain.
 
-### I-01 — The implementation contract reports a garbage `merchant()`, and funds sent to it are unrecoverable
-
-**Severity:** Informational — *Confirmed with a live PoC*
-**Affected:** `X402Vault.merchant()` (`X402Vault.sol:32-34`); `X402VaultFactory` constructor (`:20-23`)
-
-**Description.** `merchant()` reads clone args from the contract's own bytecode via `LibClone.argsOnClone(address(this), 0, 20)`. On a clone that is correct. On the **implementation** contract — a normal, fully-formed `X402Vault` deployed at `X402VaultFactory.sol:22` — there are no appended args, so the call reads 20 bytes out of the implementation's own runtime code and returns them as an address. Captured live:
-
-```
-impl.merchant() : 0x7651146100Fe578063AffED0E014610106578063
-impl.payout()   : 0x7651146100Fe578063AffED0E014610106578063
-```
-
-The value is visibly opcode bytes (`76 51` = `PUSH17`, `14 61` = `EQ PUSH2`), is non-zero, and is stable. It is **not** `address(0)`, so any reasoning of the form "the implementation falls back to the zero address and is therefore inert" is wrong.
-
-Consequences: (a) `payout()` on the implementation returns that garbage address, so any tokens sent to the implementation address would be sent to a destination nobody controls — permanently lost; (b) `changePayout` on the implementation would require a signature from that garbage address, which is infeasible, so it cannot be taken over; (c) the classic `ecrecover`-returns-zero forgery is **not** reachable, because Solady returns `false` outright for a zero signer (`SignatureCheckerLib.sol:85`) — verified in the vendored source, not assumed.
-
-The implementation is not protected by an initializer lock (the Solidity analogue of OpenZeppelin's `_disableInitializers()`), and the project's test suite asserts the factory *can* call `initPayout` on it (`X402VaultFactory.t.sol:42-50`).
-
-**Impact.** No current exploit. The real risk is operational: the implementation address is publicly discoverable via `factory.implementation()`, and anyone who sends tokens to it — a copy-paste error, a misconfigured backend, an airdrop — loses them with no recovery path.
-
-**Recommended fix.** (a) Document prominently that the implementation address must never receive funds, and add it to any monitoring/denylist. (b) Consider making the implementation safely inert: give it a `payout()` that reverts or explicitly returns zero, and revert `merchant()` when no clone args are present (e.g. check `extcodesize` against the expected clone length), so a mistake surfaces as a revert rather than a silent transfer to a garbage address. (c) When H-03 is addressed, ensure the implementation cannot be initialized at all.
-
-**Test to add:** yes — assert that `merchant()` reverts (or returns `address(0)`) on the implementation, locking in whichever behaviour is chosen.
+**Test to add:** yes — a fork test against the target chain that runs the deploy script and asserts the resulting factory's owner, operator, and implementation are the intended ones. `forge script` supports `--fork-url` for exactly this.
 
 ---
 
-### I-02 — The vault is entirely unwired: the backend computes nothing and calls nothing
+### L-01 — Low — `payout` may be set to the vault, the factory, or an address that cannot receive, with no validation
 
-**Severity:** Informational (but critical context for deployment readiness)
-**Affected:** the backend in its entirety
+**Affected:** `X402Vault.changePayout` (`X402Vault.sol:63`), `X402VaultFactory.createVault`.
 
-**Description.** A full survey of `backend/` establishes:
+**Description.** Only `address(0)` is rejected. Setting `payout = address(vault)` makes `safeTransfer(token, vault, amount)` a self-transfer that moves nothing while returning success — the merchant's funds silently stop progressing, and the merchant must sign a new payout change to recover. Setting `payout = FACTORY` commingles merchant funds with the fee pool, where the owner's `withdrawFees` sweep will move them out to the owner's chosen recipient — a self-inflicted version of H-01.
 
-- **No fee computation.** `grossAmount`, `x402GoFee`, `facilitatorFee`, `recordSettlement` have **zero occurrences repo-wide**. No service, type, schema, or route produces a split.
-- **No chain integration.** No `createVault`, `withdrawAll`, `initPayout`, `changePayout`, or `vaultOf` call. No RPC URL, no chain client, no factory/vault/USDC address configured in any env var or constant.
-- **No EIP-712 signing.** No `signTypedData`, no `TypedDataEncoder`, no domain construction anywhere.
-- **`OPERATOR_KEY` is dead.** `backend/src/utils/validateEnv.ts:8` requires it for the server to boot, and **no other line in the backend reads it**. The key is validated, then discarded. `CELO_FACILITATOR_API_KEY` is likewise set in `.env` and referenced nowhere.
-- **No x402 payment code at all.** Despite the product name, there is no `/verify`, `/settle`, or facilitator client. `apiKeyAuth` exists but is mounted on no production route — its only consumer is a test probe (`backend/src/__tests__/apiKeys.test.ts:120-124`).
+**Impact.** Self-inflicted or socially-engineered fund misrouting. Low because it requires the merchant's own signature, but the failure is silent and the `payout = FACTORY` case escalates beyond the merchant's control once swept.
 
-The only links between backend and contracts are **comments that say the link does not exist** — `backend/src/services/payout.service.ts:19-25` ("That check does not exist yet, so what is stored here is a preference, not an authority, and nothing that moves value may treat it as one until the vault is wired up") and `backend/src/docs/payout.yaml:64-70` ("This endpoint records an address and nothing else"). Those comments are accurate and commendably explicit.
+**Recommended fix.** Reject `newPayout == address(this)` and `newPayout == FACTORY` in `changePayout` and `createVault`. Both are unambiguous mistakes with no legitimate use.
 
-**Impact.** The system cannot settle a payment, compute a fee, create a vault, or withdraw. Any vault deployed today holds funds that only a hand-run `cast` command could move. This also means C-01/C-02 are not yet *reachable in production* — which is the one piece of good news, and makes now the right moment to fix them, before the wiring exists to be exploited.
-
-**Recommended fix.** Build the integration with the fixes in §5 already in place, not after. Specifically: a fee module that computes and *records* the split, an EIP-712 signer for `ChangePayout`, and an operator withdrawal service that reads recorded entitlements rather than live balances.
-
-**Test to add:** yes — integration tests covering the full path from settlement report to withdrawal, asserting the recorded split matches the transferred amounts.
+**Test to add:** yes — both must revert.
 
 ---
 
-### I-03 — No architecture or flow documentation exists
+### L-02 — Low — The implementation contract is not a "locked" instance: `merchant()` returns garbage rather than reverting
 
-**Severity:** Informational
+**Affected:** `X402Vault.merchant()` (`X402Vault.sol:37-39`), the implementation deployed by the factory constructor.
 
-**Description.** `contracts/README.md` is the unmodified Foundry boilerplate (it still references `script/Counter.s.sol`, which does not exist). `backend/README.md` is the unmodified Express template. The root `README.md` is two lines. There is **no document describing the settlement flow end to end** — the fee split, who funds the vault, when withdrawals happen, or what the operator is trusted to do. The closest statements are the two "not wired yet" comments cited in I-02, plus `frontend/README.md:108-111`.
+**Description.** `LibClone.argsOnClone(instance, start, end)` is documented *"The `instance` MUST be deployed via the clone with immutable args functions. Otherwise, the behavior is undefined."* (`LibClone.sol:682-683`). It reverts only when the address has **less than 0x2d (45) bytes of code**; a larger ordinary contract does not revert — the function `extcodecopy`s arbitrary bytes of its own runtime code and returns them as the args. Tracing the exact path for the implementation (`end = 20`, `start = 0`, `extcodesize ≈ 4021`, so `n ≈ 3976`): the clamp `d := mul(gt(n, start), sub(d, mul(gt(end, n), sub(end, n))))` resolves to `20` on both branches of the marker check, so `merchant()` deterministically returns `address(bytes20(runtimeCode[0x0d:0x21]))`.
 
-**Impact.** The specification this audit was conducted against exists only in the audit brief. That is precisely how C-02 and H-01 arose: no written contract for what the code must guarantee, so nothing to check against. It is also why the H-01 divergence is genuinely ambiguous rather than a plain bug.
+For the current build that value is `0x5f5FfD5b5060043610610085575f3560e01c8063` — a dead address. **It does not revert.**
 
-**Recommended fix.** Write a short `docs/settlement.md` stating: the fee formula and who sets the rate; the vault funding path; the operator's exact authorities and their bounds; the payout-change authorization model (resolving H-01); the withdrawal schedule and who triggers it; and the failure/recovery procedures for lost keys (H-04). This document should be the source the tests are written against.
+Consequences: `changePayout` on the implementation always reverts (`InvalidSignature` — nobody holds that key), which is the intended outcome by accident. `withdraw` on the implementation, however, passes its only gate (`msg.sender == operator()`) and would send any tokens held by the implementation to that dead address. There is no rescue function.
 
----
+**Impact.** Low in practice — the implementation should never hold tokens. But the safety here is incidental rather than designed: the implementation is protected because `initPayout` is factory-gated, not because the implementation is inert. If a token is ever accidentally sent to the implementation, it is unrecoverable and the operator's only "recovery" is to send it to a dead address.
 
-### I-04 — Audit brief references OpenZeppelin; the project uses Solady
+**Recommended fix.** Override `merchant()` (or add a guard in `withdraw`) so the implementation is explicitly inert — e.g. revert when `address(this) == FACTORY_IMPLEMENTATION`, or when `merchant()` reads as a non-clone. The conventional equivalent of OpenZeppelin's `_disableInitializers`. At minimum, document that the implementation must never hold value.
 
-**Severity:** Informational
-
-**Description.** The brief asks to inspect "OpenZeppelin dependencies" and refers to "OpenZeppelin ECDSA utilities". The project depends on **Solady** exclusively (`remappings.txt`: `solady/=lib/solady/src/`; only `forge-std/` and `solady/` exist in `lib/`). There is no OpenZeppelin in the dependency tree.
-
-This is not merely a naming difference — the two libraries disagree on behaviour that matters:
-
-| Behaviour | OpenZeppelin | Solady (this project) |
-|---|---|---|
-| High-s signatures | `ECDSA.recover` **reverts** | **Accepted** (`SignatureCheckerLib.sol:23`); harmless here only because of the nonce (L-05) |
-| Zero signer | reverts | returns `false` (`SignatureCheckerLib.sol:85`) — closes the `ecrecover`-returns-zero forgery |
-| `transfer` to codeless address | reverts | reverts (`SafeTransferLib.sol:346-350`) — same outcome |
-| `transfer` returning `false` | reverts | reverts — same outcome |
-| `transfer` returning nothing | succeeds if code present | succeeds if code present — same outcome |
-
-**Impact.** None at runtime. The risk is reasoning: anyone applying OpenZeppelin assumptions to this code will conclude that signatures are non-malleable when they are not (L-05).
-
-**Recommended fix.** Correct the brief/dependency documentation, and record the malleability difference explicitly so it is not re-litigated. The Solady choice itself is sound — it is well-audited, gas-efficient, and correct in the places that matter here.
+**Test to add:** yes — pin the current behaviour and assert the intended one: `X402Vault(factory.implementation()).merchant()` should revert (or return `address(0)`), not garbage.
 
 ---
 
-### I-05 — The same operator private key sits in plaintext in two `.env` files
+### L-03 — Low — Rogue clones of the implementation are functional, and the real operator holds withdrawal rights over them
 
-**Severity:** Informational
+**Affected:** `X402Vault.withdraw` gated on `IX402VaultFactory(FACTORY).operator()`.
 
-**Description.** `contracts/.env` sets `OPERATOR=0x402001B3fbf1462939657eb7f64EE3743eAdf35E` and `backend/.env` holds the corresponding `OPERATOR_KEY`. The same EOA is thus both the on-chain factory operator and the key the backend environment expects to hold. **Both files are correctly gitignored** (verified: `git check-ignore` matches `backend/.gitignore:72` and `contracts/.gitignore:18`; `git ls-files` shows only the `.env.example` files are tracked), so **no secret is committed**. This is an operational-hygiene note, not a leak.
+**Description.** Anybody may call `LibClone.cloneDeterministic(implementation, attackerChosenArgs, salt)` from their own contract. The clone's `FACTORY` immutable resolves to the **real** factory (immutables are baked into the implementation, not the clone), so its `withdraw` is callable by the **real operator**, and its `payout()` is the merchant address the attacker encoded in the args. Such a clone cannot be initialized (`initPayout` requires `msg.sender == FACTORY`, and the factory only calls it on addresses it deploys itself), but it does not need to be — `payout()` falls back to `merchant()`.
 
-**Impact.** The key is by definition the ability to drain every vault (C-01) and it lives on at least two developer machines. Compromise of either machine — or of the backend host, once the key is actually used — is total loss.
+**Impact.** Informational-to-Low. An attacker cannot profit: any funds sent to a rogue clone are withdrawable by the real operator to the *attacker-chosen merchant address*, which the attacker also chose — so they could arrange for value to reach an address they control, but only value that somebody voluntarily sent to a contract that is not the canonical vault. The realistic risk is confusion: a rogue clone with `merchant = victim` looks like a plausible vault at an address that is not `vaultOf(victim)`. `vaultOf()` is the authoritative check, and the backend must use it rather than trusting a supplied address.
 
-**Recommended fix.** Before mainnet: rotate the key (it has been on disk in development), hold the operator key only in the backend's secret manager (never in a developer's `contracts/.env` — the deploy script only needs `PRIVATE_KEY`, `OWNER` and `OPERATOR` *addresses*), and plan the split-key architecture in §5 so no single key can drain every vault.
+**Recommended fix.** Document that `vaultOf(merchant)` is the only canonical address, and have the backend derive `payTo` from it rather than accepting an address. Consider having `withdraw` also verify `merchant() != address(0)` and `LibClone` membership, or bind the clone to the factory by construction.
+
+**Test to add:** yes — assert that a rogue clone deployed outside the factory cannot be initialized, and that `vaultOf` never returns a rogue address.
 
 ---
 
-### I-06 — No native-token (ETH) handling
+### L-04 — Low — No reentrancy exposure today, but the risk is latent and untested in the form that will matter
 
-**Severity:** Informational
-**Affected:** `X402Vault` (no `receive`/`fallback`)
+**Affected:** `X402Vault.withdraw`, `X402VaultFactory.withdrawFees`.
 
-**Description.** The vault cannot receive or withdraw native ETH. Every path is ERC-20. On Celo (chain ID 42220, per `broadcast/.../42220/`), both native CELO and ERC-20 CELO/USDC exist, and the gas-currency abstraction means a user may well think in native terms.
+**Description.** `withdraw` performs external calls in a loop with no reentrancy guard. It is **currently safe**, for a specific reason: it contains no state to corrupt. The only storage in the vault is `_payout`/`nonce`, written exclusively by `changePayout` (signature-gated) and `initPayout` (factory-gated, one-shot, already consumed by the time any withdrawal can occur). A token re-entering `withdraw` fails the operator check (`msg.sender == token != operator`), which `test_withdraw_reentrancyThroughTokenIsBlocked` demonstrates. `withdrawFees` re-reads `balanceOf` per iteration, so a re-entrant call cannot double-spend.
 
-**Impact.** None if settlement is ERC-20 only — which appears to be the intent. The risk is a settlement path that assumes the vault can receive native currency: those funds would be stuck, since there is no code path to move them.
+The gap is in the *test*, not the code: the existing reentrancy test only proves the "token is not the operator" case. When on-chain accounting is added (§5.3), the attack becomes real — a malicious token called in the merchant leg re-enters `withdraw` before the balance decrement lands, and drains against a stale entitlement. The current test would still pass, because it asserts the wrong failure mode.
 
-**Recommended fix.** Document explicitly that the vault is ERC-20-only. If native settlement is ever required, add an explicit `receive()` plus a native withdrawal path — deliberately, with its own access control and events, not by accident.
+**Impact.** None today. Potentially High the moment accounting is added, and the existing test would give false confidence at exactly that moment.
+
+**Recommended fix.** Do not add `nonReentrant` now — it costs gas to protect state that does not exist. Instead: (a) document in the contract that `withdraw` holds no state and that any accounting added to it must follow checks-effects-interactions with a guard; (b) add the reentrancy test *when the state is added*, in a form where the token re-enters **as the operator**.
+
+**Test to add:** yes, deferred and conditional. Record the intent now so it is not forgotten.
+
+---
+
+### L-05 — Low — Duplicate token addresses in one batch are permitted
+
+**Affected:** `X402Vault.withdraw`.
+
+**Description.** The same token may appear multiple times in `tokens`, each with its own amounts (tested: `test_withdraw_sameTokenListedTwice`). Not exploitable — the sum must still fit the balance, and an over-draw reverts the whole batch atomically. But it multiplies the external calls, complicates reconciliation, and makes a backend bug (a duplicated settlement row) express itself as a doubled transfer rather than a revert.
+
+**Recommended fix.** Either reject duplicates (`token > previous` monotonic ordering, cheap and enforceable in the loop) or document that duplicates are the backend's responsibility to avoid.
+
+**Test to add:** yes — assert the ordering requirement rejects duplicates, if adopted.
+
+---
+
+### L-06 — Low — No ETH ingress, and no rescue for force-fed ETH
+
+**Affected:** `X402Vault` (no `receive`/`fallback`), `X402VaultFactory`.
+
+**Description.** Neither contract has a `receive()` function, so ordinary ETH transfers revert — good, since nothing handles native value. But ETH can still be forced in via `selfdestruct` from another contract, and there is no path to move it out. Solady's `SafeTransferLib` also provides `safeTransferETH`, which is unused.
+
+**Impact.** Negligible for an ERC-20-only system on Celo; the only exposure is permanently stranded dust from a forced send. Worth noting only because the absence of `receive()` makes it look handled when it is only *mostly* handled.
+
+**Recommended fix.** Document that the vault is ERC-20-only and that native value is unsupported. If it matters, add an operator-gated native sweep.
+
+**Test to add:** no.
+
+---
+
+### I-01 — Informational — `Unauthorized()` has the same selector in `Ownable` and `X402Vault`
+
+`X402Vault` declares `error Unauthorized()` (`X402Vault.sol:23`) and Solady's `Ownable` declares the same (`Ownable.sol:20`). Both resolve to selector `0x82b42900`. Reverts from the factory's `onlyOwner` path and from the vault's operator check are therefore byte-identical, so a client cannot distinguish "you are not the owner" from "you are not the operator" without knowing which contract reverted. Cosmetic, but it complicates error handling in the integration that does not exist yet. Consider distinct error names per contract.
+
+Relatedly, `X402Vault.AlreadyInitialized()` shares its selector with Solady `Ownable.AlreadyInitialized()` (`0x0dc149f0`) — same reasoning, same (low) impact.
+
+---
+
+### I-02 — Informational — Nonce overflow panics rather than reverting with a typed error
+
+`nonce` is `uint96` and increments with checked arithmetic (`nonce = n + 1`), so overflow panics (`0x11`) rather than raising a named error. Reaching 2^96 signatures is not feasible; noted only because the error is untyped. Tested by `test_changePayout_nonceOverflowPanics`.
+
+---
+
+### I-03 — Informational — The EIP-712 domain-separator cache is defeated on every clone
+
+`EIP712` caches `_cachedThis`, `_cachedChainId` and the domain separator as **immutables computed in the constructor** (`EIP712.sol:39-80`), and invalidates them when `address(this)` or `block.chainid` changes (`_cachedDomainSeparatorInvalidated`, `:291-299`). Because a clone's `address(this)` is never the implementation's address, `_hashTypedData` **always** takes the `_buildDomainSeparator()` path on a clone — two `keccak256` calls per verification, plus reads of five immutables.
+
+This is **correct** (the invalidation check is precisely what makes it safe, and `test_eip712Domain_reportsVaultAsVerifyingContract` plus the chain-ID tests confirm it), and it is the right answer to the brief's question about constructor/immutable compatibility with clones. It is recorded here only because the cache is pure cost in this architecture — the code reads as though it is cached, and it never is.
+
+If `changePayout` volume ever justifies it, caching the separator in storage on first use would trade one cold `SSTORE` for a warm `SLOAD` on subsequent verifications. Given payout changes should be rare, **this is not worth adding state for.** No change recommended.
+
+---
+
+### I-04 — Informational — Generic domain name and no `salt`
+
+`_domainNameAndVersion()` returns `("X402Vault", "1")` (`X402Vault.sol:117-119`) and EIP-5267 `eip712Domain()` reports `salt = bytes32(0)`. Cross-deployment separation is still sound because `verifyingContract` differs per clone (each clone is its own verifying contract, so a signature for one vault can never be valid for another — tested by `test_domain_signatureNotValidOnOtherVault` and `test_domain_sameMerchantSignatureCannotCrossFactories`). The residual risk is a *different* protocol reusing the name "X402Vault" with a colliding domain; a merchant signing blind could not tell them apart. Consider a project-specific name string. Low practical impact.
 
 ---
 
 ## 4. Trust assumptions
 
-The system's security rests on these assumptions. Each is stated with what breaks if it fails, because several are load-bearing today and should not be.
+Stated explicitly, because several of them are currently implicit and at least two are load-bearing.
 
-| # | Assumption | Holds today? | Consequence if violated |
-|---|---|---|---|
-| T1 | **The operator key is never compromised.** | Assumed, shared with the backend env, and stated by the brief as something to minimize | **Total loss of all merchant funds, silently, in one transaction** (C-01). The brief's requirement #9 is unmet. |
-| T2 | The operator computes the settlement split honestly. | Unverifiable — nothing records or checks it | Merchants underpaid; x402Go over/under-collected. No on-chain evidence either way (C-02). |
-| T3 | The operator sends fees to x402Go. | No — `feeRecipient` is a free parameter | Fees redirected to the operator, indistinguishable from correct operation (C-01). |
-| T4 | The factory owner key is secure and available. | Single-step transfer, no ceremony (L-06) | Loss of the owner key means the operator can never be rotated (H-04). |
-| T5 | The factory owner is honest and competent. | Single-step `setOperator`; `address(0)` accepted | A mistake or a malicious owner freezes all vaults permanently (H-04). |
-| T6 | Merchant payout keys are secure. | Merchant is a SIWE browser hot wallet | Hot-key compromise redirects all future payouts — permanently, since the merchant keeps that authority forever (H-01). |
-| T7 | Settled tokens are well-behaved ERC-20s. | `SafeTransferLib` handles the common quirks correctly | Fee-on-transfer/rebasing tokens break reconciliation (M-04); a lying token makes a "successful" withdrawal meaningless (M-05). |
-| T8 | The rollout from `tokenBalance` to `withdrawAll` is not raced. | **No** — no snapshot, no ledger | Stale-split withdrawals and permanent reconciliation drift (M-04). |
-| T9 | The backend behaves as its comments describe. | **No mechanism** — the code does not exist (I-02) | The "preference, not an authority" discipline in `payout.service.ts:19-25` is upheld only by developer memory. |
-| T10 | Clone deployment via CREATE2 is safe. | **Yes** — verified | Nothing found. The pattern is correct; the gaps are H-03 and H-02, which are factory-level, not clone-level. |
+| # | Assumption | Enforced? | If violated |
+| --- | --- | --- | --- |
+| T1 | The **operator** declares the correct split on every withdrawal | **Not enforced anywhere.** Honesty only. | H-01: merchant funds confiscated. No detection path (H-03). |
+| T2 | The **operator** does not create vaults with a hostile payout | **Not enforced.** Only the operator's own restraint prevents it. | C-01: total theft. |
+| T3 | The **operator** eventually calls `withdraw` | **Not enforced.** No merchant exit exists. | H-02: indefinite censorship; permanent if the owner key is also gone. |
+| T4 | The **owner** key is available for recovery | Enforced by nothing; `renounceOwnership` can destroy it. | M-06: permanent freeze. |
+| T5 | The **merchant** key is uncompromised and kept secure | Enforced by nothing; the frontend encourages a browser wallet. | M-03: permanent payout redirection. |
+| T6 | All tokens behave as standard ERC-20s (no fee, no rebase, exact transfers) | **Not enforced.** No allowlist. | H-04: silent ledger drift, undetectable. |
+| T7 | The **backend** computes the split correctly and idempotently | **The backend does not compute a split at all.** | H-03: the invariant holds nowhere. |
+| T8 | `tokenBalance` → `withdraw` is not raced | Not enforced; no snapshot, no ledger. | Stale splits: revert (safe) or dust (reconciliation drift). |
+| T9 | The facilitator's fee is netted out of the fee leg by convention | Not enforced; not even documented in code. | M-05: under- or double-payment of the facilitator. |
+| T10 | The implementation contract is never sent value | Not enforced; only incidental (L-02). | Unrecoverable tokens. |
 
-**The assumption that most needs to change is T1.** Every other finding is downstream of "the operator can do anything to the money". Until C-01 and C-02 are fixed, this is not a vault system with an operator; it is a hot wallet with an operator.
+**The single most important line in this table is T1/T2.** Everything the contract does well — immutable fee destination, per-vault signature domains, atomic transfers, clone isolation — is downstream of a trust assumption it does not check. The immutable fee recipient closed the previous revision's critical finding by removing the operator's ability to name a *destination*; the remaining exposure is the operator's ability to name an *amount* and an *initial destination*.
 
 ---
 
 ## 5. Recommended architectural changes
 
-The fixes below are ordered by dependency. Items 1–3 are prerequisites for holding real funds; the rest are hardening.
+Ordered by value per unit of change. Items 5.1 and 5.2 are the ones that matter before mainnet.
 
-**1. Make the fee destination immutable and the split bounded (fixes C-01, M-03).**
-Set the fee recipient(s) on the factory at deployment and expose them as immutables. Remove `feeRecipient` from `withdrawAll` entirely. The operator stops having any say in *where* money goes; it retains a say only in *how much*, bounded by item 2.
+### 5.1 Never let the operator choose a payout for someone else's vault (closes C-01)
 
-**2. Add a minimal on-chain ledger (fixes C-02, M-04, enables M-03).**
+The highest-value change in this report, and the smallest. In `createVault`, require that an operator-created vault has `payout == merchant`:
+
 ```solidity
-mapping(address token => uint256) public merchantBalance;
-mapping(address token => uint256) public feeBalance;
-
-/// Operator-attested. Must not credit more than the vault actually holds.
-function recordSettlement(address[] calldata tokens, uint256[] calldata merchantAmounts, uint256[] calldata feeAmounts) external onlyOperator {
-    for (uint256 i; i < tokens.length; ++i) {
-        merchantBalance[tokens[i]] += merchantAmounts[i];
-        feeBalance[tokens[i]]     += feeAmounts[i];
-        emit SettlementRecorded(tokens[i], merchantAmounts[i], feeAmounts[i]);
-    }
-    // Invariant: recorded entitlements may never exceed what the vault holds.
-    // (Check per token, or reconcile against tokenBalance in a separate function.)
-}
+if (msg.sender != merchant && msg.sender != operator) revert Unauthorized();
+// An operator may provision the vault, but may not choose where the merchant's
+// money goes. Only the merchant may name a payout other than their own address,
+// and only by signing it.
+if (msg.sender != merchant && payout != merchant) revert Unauthorized();
 ```
-Withdrawals then decrement recorded balances instead of re-deriving from a live balance, which makes the operation idempotent and race-free. **Critical caveat:** because the operator authors these numbers, cap credits by observed holdings — otherwise the operator can mint entitlements and drain other merchants' real funds, which is worse than the current state, not better.
 
-**3. Enforce the fee rate in code, not in calldata (fixes C-02's root cause).**
-The only way to bound a compromised operator without a full redesign is to stop letting it choose the split. Have the operator report the **gross** amount, and let the contract compute the rest:
-```solidity
-uint256 fee = gross * feeBps / 10_000;   // feeBps immutable, set at deploy, capped (e.g. <= 1000)
-merchantBalance[token] += gross - fee;
-feeBalance[token]     += fee;
-```
-The operator can then inflate `gross` to steal the fee fraction — a bounded, detectable, and much smaller blast radius than 100%. This is the single most effective blast-radius reduction available without moving withdrawal authority to the merchant.
+A merchant-initiated `createVault` keeps today's freedom. An operator-initiated one gets the safe default, and any custom payout must then come from the merchant's own `changePayout` signature — which already exists, is already domain-bound, and is already tested. If onboarding needs an operator-provisioned custom payout, accept a merchant signature over `CHANGE_PAYOUT_TYPEHASH` with `nonce == 0`.
 
-**4. Give the merchant a withdrawal path (fixes H-04's severity).**
-`withdrawToMerchant(tokens)` gated on `msg.sender == merchant()`, paying to `payout()` and bounded by `merchantBalance`. The owner of the funds should always be able to recover them. This converts "lost operator key = permanent loss" into an operational inconvenience, and is the cheapest high-value change in this report.
+### 5.2 Bound the operator's control over the split (bounds H-01)
 
-**5. Bind vault creation's payout to the merchant (fixes H-02).**
-Create every vault with `payout = merchant` and delete the parameter. The only route to a different payout becomes a signed `changePayout` — which also makes H-03's bypass unreachable in practice.
+With 5.1 in place, the operator can no longer redirect funds — but it can still declare any amount a "fee". Three options, in ascending order of robustness:
 
-**6. Resolve the payout-authorization model (fixes H-01).**
-Decide, document, and test: merchant authority (current code, recommended, plus M-01's deadline) or previous-payout authority (the brief). Whichever is chosen, the frontend's onboarding copy and the backend's comments must agree with it.
+- **Fee cap.** An owner-set `maxFeeBps` on the factory, enforced as `feeAmounts[i] * 10_000 <= (merchantAmounts[i] + feeAmounts[i]) * maxFeeBps`. Cheap, one `SLOAD` per vault (`maxFeeBps` read once outside the loop), and bounds the damage to the fee rate.
+- **Recorded entitlement.** An operator-writable `recordSettlement(token, merchantAmount, feeAmount)` that *increments* per-token credits, with `withdraw` bounded by them. Makes the merchant's balance publicly readable and makes withdrawn-vs-recorded auditable. Does **not** by itself stop a malicious operator (it can mint credits), so it must ship with a cap or with merchant-signed settlements — but it converts "no record at all" into "a record that can be diffed".
+- **Merchant-signed split.** The merchant signs `(vault, token, merchantAmount, feeAmount, nonce, deadline)`; the operator submits. This makes the operator structurally unable to misstate anything, and it reuses `changePayout`'s existing machinery almost verbatim. It is the only option that makes T1 true.
 
-**7. Harden the signature scheme (fixes M-01, L-05, M-06).**
-Add `deadline` to the struct, bump the domain version, and decide on low-s enforcement. Add an event on every payout change.
+Recommendation: ship 5.1 plus the fee cap now (both are small and neither changes the withdrawal ABI), and add the entitlement record when the backend ledger is built, so that the backend and the chain have the same shape. Treat merchant-signed splits as the target state if the merchant volume justifies the UX cost.
 
-**8. Add events and a reentrancy guard (fixes M-02, L-02).**
-Events on `PayoutChanged`, `Withdrawn`, `OperatorChanged`, `SettlementRecorded`. Introduce `ReentrancyGuard` **in the same change as item 2** and follow strict CEI ordering — the guard without the ordering is not sufficient.
+### 5.3 A merchant exit path (closes H-02)
 
-**9. Allowlist settlement tokens (fixes M-05, mitigates M-04, L-01).**
-An owner-managed token allowlist bounds the damage of a lying or hostile token, makes M-05's verification gap tractable (only vetted tokens can enter), and lets the backend drop blocked tokens from batches safely.
+The merchant needs something they can call themselves. With a recorded entitlement (5.2) this is straightforward: `withdrawToPayout(token)` callable by the merchant, bounded by their recorded balance. Without on-chain accounting, the honest options are a merchant-callable sweep permitted after an inactivity period, or an explicit, documented statement that the owner key is a liveness dependency and the merchant has no on-chain recourse. The second is defensible for a custodial platform; it is not defensible if the marketing says the merchant controls their funds.
 
-**10. Split the operator role (reduces T1's blast radius further).**
-Once items 1–3 exist, consider separating the *settlement recorder* from the *withdrawer*, so a compromised key can only do one of the two. This is optional hardening; items 1–3 are the priority.
+### 5.4 Token allowlist (closes H-04)
 
-**Also:** add a zero-address check and an event to `setOperator` (H-04), make `initPayout` one-shot or delete it (H-03), and document the ERC-20-only and implementation-address constraints (I-01, I-06).
+An owner-managed allowlist on the factory, enforced in `withdraw` and `withdrawFees`. Reject non-standard tokens at allowance time rather than discovering the problem at settlement. Write down the assumptions being enforced: exact-amount transfers, no transfer fee, no rebasing, supported decimals, standard return semantics.
+
+### 5.5 Governance hardening (bounds the owner-key blast radius)
+
+- Two-step, timelocked `setOperator` (request/accept with a delay), so a compromised owner cannot install a thief and drain in one block. `OperatorChanged` already gives monitoring a hook; a timelock gives it time to act.
+- Override `renounceOwnership()` to revert (M-06).
+- Reject `address(0)` in the constructor (M-07).
+- Move ownership to a multisig or a timelocked contract before mainnet.
+
+### 5.6 Make the fee outflow observable (closes M-01)
+
+Emit `FeesWithdrawn(tokens, feeRecipient, amounts)` from `withdrawFees`. Consider making `feeRecipient` immutable at construction — the same structural fix that closed the previous critical finding for vaults.
+
+### 5.7 Close the deployment path (closes M-02, M-08)
+
+Pin `evm_version` after confirming the target chain's supported revision (both `cancun` and `paris` build cleanly today). Delete or regenerate the stale `broadcast/` artifact — it records the previous 1-argument factory. Switch the deploy script to keystore/`--account` signing and make `OPERATOR` required. Add a fork test that runs the script against the target chain and asserts the resulting owner, operator, and implementation.
+
+### 5.8 Explicitly decline the changes that add risk without adding safety
+
+- **Do not** add an upgrade mechanism or proxy admin. The implementation is immutable; a bug means a new factory and a migration. That is the right trade for this contract size and this threat model — an upgrade path would add a privileged write to every vault's behaviour, which is a strictly larger blast radius than the bug it insures against.
+- **Do not** add `nonReentrant` yet (L-04). It would cost gas to protect state that does not exist.
+- **Do not** replace Solady with OpenZeppelin. Solady is well suited here (CWIA clone support is the reason this architecture is cheap). The one behavioural difference that matters — malleability (M-04) — should be handled with an explicit low-s check, not a library swap.
 
 ---
 
 ## 6. Recommended tests
 
-The existing suite is strong on the mechanics that already work. These target what it does not cover — each maps to a finding above.
+The existing suite is strong on the paths it covers: 167 tests, 10,000 fuzz runs each, and genuinely good coverage of signature edge cases (cross-vault, cross-chain, wrong signer, malformed lengths, compact form, deadline boundary, replay, malleable twin), token quirks (no-return, false-return, reverting, no-code, reentrancy), multi-token and duplicate-token batches, zero/empty/max amounts, and initialization gating. The gaps are the ones the current design would not have caught.
 
-**Regression tests for the confirmed PoCs** (the four PoC tests invert directly):
+### 6.1 The tests that would have found these findings
 
-1. `withdrawAll` with `feeAmounts` exceeding `feeBalance` reverts; the fee leg can only reach the immutable fee recipient (C-01).
-2. A signature from the *current payout* address and from the *merchant* — exactly one must be accepted, per the decision in H-01. Assert both directions.
-3. `createVault` by the operator for a third-party merchant yields `payout() == merchant`, or reverts (H-02).
-4. `setOperator(address(0))` reverts; after the operator is unset by other means the merchant can still recover funds (H-04).
+1. **Operator-theft end-to-end (C-01).** Create a vault as the operator with a hostile payout, fund it, withdraw, assert the funds **cannot** reach `attackerPayout`. This is the single most valuable test to add.
+2. **Operator confiscation (H-01).** `withdraw` with `merchantAmounts = [0]` and `feeAmounts = [balance]` must revert (or clamp, if a cap is adopted).
+3. **Merchant exit (H-02).** With the operator key revoked, the merchant can still recover their recorded balance.
+4. **Accounting invariant (H-03).** A stateful invariant: for every token, `factory balance == Σ fee legs`, and no vault's balance ever decreases without a matching `Withdrawn` event. Run under `[invariant]` in `foundry.toml` — no invariant section exists today.
+5. **Fee-on-transfer token (H-04).** Assert the documented behaviour: the recipient receives *less* than the requested amount and the contract still succeeds — pinning the fact that the backend must verify post-conditions.
+6. **Rebasing token simulation (H-04).** Change the balance between computing a split and executing it; assert the deflationary case reverts atomically and the inflationary case under-withdraws.
+7. **`withdrawFees` event (M-01)** — `vm.expectEmit` across zero-balance, single-token, and multi-token sweeps.
+8. **Non-owner cannot sweep to an arbitrary recipient (M-01)** — exists (`test_withdrawFees_onlyOwner`); extend it to assert the emitted event's recipient so a redirect is visible.
+9. **Payout-change authority rotation (M-03)** — once added, the old merchant loses authority.
+10. **Malleability pinned (M-04)** — assert the current permissive behaviour deliberately, so a future low-s change is a visible decision rather than a silent one.
+11. **Three-way split identity (M-05)** — a backend test asserting `gross == merchant + x402Go + facilitator`; no test owns this today.
+12. **`renounceOwnership()` (M-06)** — assert it reverts, once overridden.
+13. **Constructor zero-operator (M-07)** — asserts the deploy-time footgun is closed.
+14. **Fork test of the deploy script (M-08)** — owner, operator, and implementation as intended on the target chain.
+15. **`payout == address(this)` and `payout == FACTORY` (L-01)** — both rejected.
+16. **Implementation is inert (L-02)** — pin `merchant()`'s behaviour on the implementation, and assert the intended one.
+17. **Rogue clone (L-03)** — cannot be initialized; `vaultOf` never returns it.
+18. **Empty and single-element bounds (area 14)** — largely present; add the one-unit case explicitly for `withdraw` and `changePayout`.
+19. **Concurrent withdrawals (area 9)** — two withdrawals built on the same snapshot; assert the second reverts atomically rather than partially settling.
 
-**Accounting invariants (new, once item 2 of §5 lands):**
+### 6.2 Test-infrastructure recommendations
 
-5. `grossAmount == merchantAmount + x402GoFee + facilitatorFee` holds for every recorded settlement, fuzzed over amounts and token counts.
-6. A settlement report that would credit more than the vault holds reverts (C-02).
-7. Recorded entitlements never exceed actual holdings: `merchantBalance[t] + feeBalance[t] <= tokenBalance(t)`, as a fuzz invariant across arbitrary settlement/withdrawal interleavings.
-8. Two sequential partial withdrawals against recorded balances sum correctly and cannot exceed the entitlement (M-04).
-
-**Signature scheme:**
-
-9. A `ChangePayout` with `deadline < block.timestamp` reverts; the boundary case at exactly `deadline` succeeds (M-01).
-10. If low-s is enforced, the malleable twin reverts; if not, rename the existing test to state the real property instead of implying a guarantee (L-05).
-11. A version-1 signature is rejected by a version-2 contract (M-06).
-
-**Tokens and reentrancy:**
-
-12. A `LyingToken` returning `true` while moving nothing — document the accepted behaviour and assert the recommended post-withdrawal balance check catches it (M-05).
-13. A token that re-enters `withdrawAll` *as the operator* cannot double-spend a recorded balance (L-02). This is the test the current reentrancy mock does not attempt.
-14. Fee-on-transfer and rebasing tokens behave as documented — revert or explicit surplus (M-04).
-
-**Event and access control:**
-
-15. `vm.expectEmit` on `PayoutChanged`, `Withdrawn`, `OperatorChanged`, including the `initPayout` path (M-02), closing the "silent privileged action" gap.
-16. A second `initPayout` reverts; the implementation contract's `merchant()` reverts or is zero (H-03, I-01).
-
-**Integration (once I-02 is addressed):**
-
-17. End-to-end: settlement report → recorded split → withdrawal → recipient balances match the recorded amounts exactly.
-18. A batch containing one blocked/reverting token reverts atomically, and omitting that token succeeds (L-01).
-
-Additionally, the existing test at `X402Vault.t.sol:318` (`test_changePayout_malleableTwinCannotBeUsedToReplay`) should be renamed — the twin **is** accepted; the correct claim is that the nonce neutralises it.
+- Add an `[invariant]` section to `foundry.toml` and the stateful invariants above. Unit tests with 10,000 fuzz runs are excellent at finding boundary bugs and structurally incapable of finding "the sum of all fee legs must equal the factory balance".
+- Add a `--evm-version`-pinned CI job, and a fork test against the target chain.
+- Add a test that asserts the deployment artifact and the contracts agree — the stale broadcast file (M-08) is exactly the class of drift a build-verification test catches.
 
 ---
 
 ## 7. Gas optimization recommendations
 
-Blunt assessment first: **gas is not this project's problem.** The code already uses calldata arrays, immutable factory, packed storage, custom errors, cached locals, and `++i`. The measured profile is good — vault creation ~90–98k gas, the whole `X402Vault` runtime is 3,623 bytes against a 24,576-byte limit, and the withdrawal loop makes only the external calls it must. Optimizer runs are set to 1,000,000, which is appropriate for a hot-path contract.
+The gas profile is already good and none of the following should be pursued at the expense of clarity or safety. The architecture's biggest win is structural: CWIA clones mean a vault costs ~50 + 20 bytes of deployed code regardless of the 4,021-byte implementation, so per-merchant onboarding is cheap by construction.
 
-The one thing worth saying loudly: **do not optimize at the expense of the fixes above.** Adding the ledger costs storage reads and writes; adding events costs ~375 gas each. Both are correct trades. Everything below is a micro-optimization worth less than a fraction of one event.
+**Already optimal — leave alone.**
 
-1. **`unchecked { ++i; }` in the withdrawal loop** (`X402Vault.sol:82`). Solidity 0.8 emits an overflow check per iteration even though `len` bounds it. Saves roughly 30–40 gas per token. Safe: `i < len` and `len` is a calldata length.
-2. **`IX402VaultFactory(FACTORY).operator()` is a cold external call per withdrawal** (`X402Vault.sol:74`). At ~2,600 gas it dominates small withdrawals. It cannot be made immutable without breaking operator rotation (which `test_withdrawAll_operatorRotationTakesEffectOnExistingVaults` correctly requires). If it ever matters, the factory could push the operator into vaults on rotation — but that reintroduces the H-03 class of privileged write path, and gas is not worth that trade. **Recommend leaving it as is.**
-3. **`merchant()` costs an `extcodecopy` on every `changePayout` and on every `payout()` fallback.** Cheap in absolute terms and correct given the clone design (it is what makes the merchant an immutable arg with no storage cost). No change recommended.
-4. **`payout()` performs one SLOAD and falls back to `merchant()` only when storage is empty**, so the common `payout == merchant` case costs nothing extra. Already optimal — and `test_storage_defaultVaultSlotIsEmpty` locks it in.
-5. **Deduplicating tokens** (L-03) would save redundant external calls in a batch, but only if the backend ever sends duplicates; the check costs more than it saves for the normal case.
-6. **The clone deployment path is already efficient** (~90k) and the pre-check at `X402VaultFactory.sol:38-40` is a genuine gas *saving* on the collision path, correctly justified in its comment. Keep it.
-7. **Batching fee recipients** (M-03's fix) will add a loop; if it lands, keep the arrays flat and calldata to avoid the nested-array decoding cost.
+- **`_payout` + `nonce` packed into one 32-byte slot** (`address` 160 bits + `uint96` 96 bits). A payout change is one `SSTORE` to a warm slot, not two. This is the single best storage decision in the contract.
+- **`FACTORY` and `implementation` are `immutable`** — read from code, no `SLOAD`.
+- **Amounts are `calldata`**, iterated by index without copying to memory.
+- **`payout()` and `merchant()` are hoisted out of the `withdraw` loop** (`X402Vault.sol:100-101`) — one `SLOAD` and one `extcodecopy` per withdrawal, not per token. `merchant()` in particular is an `EXTCODECOPY` of the clone's own runtime code, so hoisting it matters.
+- **Custom errors** throughout, rather than revert strings.
+- **`unchecked { ++i }`** in `withdrawFees`. The same treatment is missing in `withdraw`'s loop — see below.
+- **`optimizer_runs = 1000000`** favours runtime gas over deployed size. For the implementation (deployed once by the factory, executed by every vault forever) this is the correct bias, and it does not affect per-vault deploy cost, which is dominated by the fixed-size clone stub.
+
+**Worth doing — small, safe.**
+
+- **`unchecked { ++i }` in `X402Vault.withdraw`.** The loop bound comes from `tokens.length`, which cannot exceed calldata size, so overflow is unreachable. Saves ~30–80 gas per token in a multi-token batch, which is the common path for a settlement sweep.
+- **Cache `merchant()` in `changePayout`.** It is currently called twice — once for verification (`:72`) and once for the event (`:79`) — so every payout change pays two `EXTCODECOPY` operations over the clone's runtime code. A single `address m = merchant();` hoisted to the top removes one. Payout changes are rare, but this is free.
+
+**Not worth doing.**
+
+- **Caching the EIP-712 domain separator in storage** (I-03). The immutable cache is always invalidated on a clone, so the separator is rebuilt every time — but a payout change is a rare event, and adding an `SSTORE` (cold, ~20k) to save two `keccak256` calls would be a net loss until a vault had changed payout several times. Leave it.
+- **Adding `nonReentrant`** (L-04). Costs gas on every withdrawal to protect state that does not exist.
+- **Removing the `IX402VaultFactory(FACTORY).operator()` external call** (~2,600 gas cold per withdrawal). It is the price of operator rotation reaching existing vaults, which `test_withdraw_operatorRotationTakesEffectOnExistingVaults` correctly requires. The only alternative — pushing the operator into each vault on rotation — reintroduces a privileged write path across every vault and is a strictly worse trade. **Leave it as is.**
+- **Optimising `withdrawFees`' per-token `balanceOf`.** It is `onlyOwner` and rare.
+- **Packing or reordering anything else in `X402Vault`.** Storage is one slot; there is nothing left to pack.
 
 ---
 
-## 8. Direct answers to the audit questions
+## 8. Direct answers to the required questions
 
 **Can a compromised operator wallet steal merchant funds?**
-**Yes — all of them, in one transaction, with no signature and no on-chain trace.** `feeRecipient` is an operator-supplied parameter and `feeAmounts` is unconstrained calldata, so the operator labels the entire vault balance "fees" and sends it to itself. Confirmed by a passing PoC (C-01). This directly fails requirement #9. It is the most severe finding in this report, and unlike most of the others it requires no cleverness at all — just a malicious parameter.
+**Yes — completely, via C-01.** The operator can call `createVault(victim, attackerPayout)` and then `withdraw`, routing every token to an address it chose. Three ordinary calls, no owner key, no merchant signature, no detection path. Independently, the operator can confiscate 100% of a vault's balance into the fee pool (H-01) without naming any payout. Both are direct violations of the brief's requirements 9 and 10 and of the preferred model stated in area 7.
 
 **Can the operator redirect funds to an arbitrary wallet?**
-**Yes, two ways.** (a) The `feeRecipient` parameter on every withdrawal (C-01). (b) By creating a vault for a merchant with an attacker-chosen `payout`, which `createVault` writes directly via `initPayout` with no signature, and which the deterministic address makes permanent for that merchant (H-02). Both confirmed by PoC.
+**Yes at creation (C-01); no afterwards.** Once a vault exists, `payout()` can be changed only by the merchant's signature — the operator has no path to it, and this is a genuine improvement over the previous revision. The exposure is entirely in the *initial* choice of payout, which the operator makes unilaterally when it creates the vault.
 
 **Can a malicious user initialize or take control of a clone?**
-**No.** `initPayout` requires `msg.sender == FACTORY`, and the factory exposes no external path to it — its only call site is inside `createVault`, on a clone it just deployed. `changePayout` requires a valid EIP-712 signature from `merchant()`. A stranger cannot deploy at the deterministic address (only the factory's CREATE2 can), and `VaultExists` prevents re-creation. The implementation contract cannot be taken over either: its `merchant()` resolves to a garbage bytecode-derived address (verified: `0x7651146100Fe578063AffED0E014610106578063`) that nobody holds a key for, and Solady returns `false` for a zero signer so `ecrecover`-returns-zero is not reachable.
-
-The caveats are **H-03** (the `initPayout` primitive is an unguarded, un-evented, non-one-shot privileged setter that bypasses the signature model — inert today, catastrophic if the factory ever forwards to it) and **H-02** (the *operator* can control a vault's payout at creation — which is a privileged user, but it is control without a signature). `initPayout` should be made one-shot or removed.
+**No.** Three independent reasons, all verified against the source. `initPayout` requires `msg.sender == FACTORY` (`X402Vault.sol:50`), and the factory calls it only inside `createVault`, on the address it deployed in the same transaction (`X402VaultFactory.sol:49-51`) — there is no window between deployment and initialization. The CREATE2 deployer is the factory and the initcode hash includes the merchant args (`LibClone.initCodeHash`, `:618-637`), so the predicted address can only ever be occupied by a clone carrying the *same* args; address squatting is impossible. And the implementation itself cannot be initialized either. A rogue clone can be deployed by anyone, but it is inert with respect to the protocol and holds no one else's funds (L-03). This is the strongest part of the design.
 
 **Can payout-change signatures be replayed?**
-**No, not to change state.** The nonce is read, used in the digest, and incremented atomically in the same transaction, so a replayed signature fails. The EIP-712 domain binds `address(this)` (the specific clone) and `block.chainid`, and Solady invalidates its cached separator when either changes — so cross-vault, cross-factory, and cross-chain replay are all blocked. The suite proves each case (`test_changePayout_replayReverts` `:224`, `test_changePayout_oldSignatureCannotRevertLaterChange` `:231`, `test_domain_signatureNotValidOnOtherVault` `:133`, `testFuzz_changePayout_chainIdBinding` `:782`, `testFuzz_changePayout_isolatedPerVault` `:794`), and I confirmed the underlying Solady behaviour in source rather than taking the tests' word for it.
-
-Two qualifications. First, **signatures are malleable** — Solady does not enforce low-s (`SignatureCheckLib.sol:23`), and the project's own test confirms the high-s twin is *accepted*, not rejected; it is harmless only because the nonce is consumed by whichever variant lands first. Do not rely on signature bytes as a unique identifier. Second, **there is no expiry** (M-01): a signature stays executable indefinitely until its nonce is consumed, and anyone may relay it, so a leaked stale signature is a live liability.
+**No.** The digest binds `verifyingContract` (per-clone EIP-712 domain), `block.chainid` (with the cached separator correctly invalidated on chain change), `newPayout`, `nonce`, and `deadline`; the nonce increments on success, so a replayed signature fails. Cross-vault (`test_domain_signatureNotValidOnOtherVault`), cross-factory (`test_domain_sameMerchantSignatureCannotCrossFactories`), and cross-chain (`testFuzz_changePayout_chainIdBinding`) replay all fail, and an expired deadline is rejected. Malleable high-s twins are *accepted* but are single-use because the first variant consumes the nonce — so replay is prevented, though signature bytes are not unique (M-04). The residual risk is not replay but key compromise (M-03).
 
 **Can settlement accounting be fabricated?**
-**There is no settlement accounting to fabricate — and that is the finding.** `grossAmount`, `merchantAmount`, `x402GoFee`, `facilitatorFee` and `recordSettlement` occur **zero times** in the entire repository, and no backend code computes a split. The amounts in `withdrawAll` are unvalidated calldata with nothing to check them against. So yes, trivially and by construction: the operator asserts the split, and the contract believes it. Note the question implies a `recordSettlement()` exists with a mint-accounting risk — **it does not exist**; if one is added per §5, the specific hazard to guard is that it must not credit balances exceeding actual holdings, or it becomes strictly worse than today.
+**There is no on-chain accounting to fabricate — and nothing to verify against.** `recordSettlement` does not exist; `grossAmount`, `merchantAmount`, `x402GoFee`, `facilitatorFee` appear nowhere in the repository outside the previous audit document. The fabricated quantity is the *split itself*: the operator supplies both amount arrays as unvalidated calldata and the contract transfers exactly what it is told (H-03). So the answer is: no fabricated *balances* (there are none), but a wholly fabricated *settlement*, unchecked and unrecorded.
 
 **Can merchant and fee balances ever become inconsistent?**
-**They do not exist as balances, so there is nothing to keep consistent — which is the same defect.** On chain, only transfers are recorded, not entitlements, so there is no invariant that *could* be violated and none that can be checked. Off chain, the derived ledger drifts in three documented ways: withdrawal amounts computed from a live balance with no snapshot (M-04); fee-on-transfer and rebasing tokens, which make holdings permanently unequal to recorded sums; and a multi-token batch that reverts wholesale, leaving earlier legs unexecuted. There is also no reconciliation view — `tokenBalance` reports holdings, never entitlements, so a merchant cannot even ask what they are owed.
+**On chain, no — there are no balances to desync.** The vault holds tokens and transfers them; it keeps no record, so no record can disagree. A withdrawal is atomic: one loop, one transaction, and any failing leg reverts the entire call, so a partial settlement is impossible (`test_withdraw_feeLegFailureRollsBackMerchantLeg`, `test_withdraw_secondTokenFailureRollsBackFirst`). **Off chain, they diverge routinely:** any operator-chosen split (H-01), fee-on-transfer tokens (recipient receives less than debited), rebasing tokens (balance moves between computation and execution), and concurrent withdrawals racing a stale snapshot (second reverts, or dust remains). Because there is no ledger, none of this is detectable on chain (H-03, H-04).
 
 **Can a malicious ERC-20 token break withdrawals?**
-**It cannot break the vault, steal other tokens, or make it pay when it should not.** Solady's `safeTransfer` rejects reverting tokens, false-returning tokens, *and* codeless addresses (`SafeTransferLib.sol:346-350`) — I verified this in source, and the suite covers all three. Batches are atomic, so a failed leg rolls back cleanly; reentrancy is inert because a token's re-entry arrives as a non-operator `msg.sender` and reverts.
-
-Residual, and genuinely narrower than the question implies: **(a)** a token that returns `true` while moving nothing is indistinguishable from a working one — an inherent ERC-20 limitation, not a bug (M-05); **(b)** one reverting or blocklisted token aborts the whole batch, which is a liveness annoyance the operator can route around by splitting the batch (L-01); **(c)** fee-on-transfer and rebasing tokens silently break the off-chain reconciliation (M-04). An owner-managed token allowlist is the right mitigation for (a)–(c).
+**It can force a revert, but it cannot break the contract's consistency.** Solady's `safeTransfer` (verified, `SafeTransferLib.sol:336-354`) reverts `TransferFailed()` when the token has no code, reverts, or returns a word other than `1`, and accepts only the no-data (USDT) case as a success. So a hostile token halts the whole batch atomically and leaves state untouched — a liveness problem for that token, not a safety problem. A token that *conforms* while lying (returns `true`, moves nothing) cannot be detected on chain and will corrupt the off-chain ledger — which is why an allowlist (H-04) is a correctness control rather than hygiene. Reentrancy through a token's `transfer` is currently harmless (L-04).
 
 **Is the minimal-proxy implementation safe?**
-**Yes — the clone mechanics are the strongest part of this codebase.** `LibClone.cloneDeterministic` with appended immutable args, `FACTORY` as a genuine immutable (reading the implementation's value, correct under delegatecall), deterministic CREATE2 addresses with a cheap pre-check that avoids burning all gas on collision, per-clone EIP-712 domains, and a `merchant()` that correctly reads clone args. The tests confirm arg decoding, per-vault isolation, and cross-factory address separation.
-
-Two gaps, neither in the proxy mechanics themselves: **H-03**, the missing one-shot guard on `initPayout` (an un-evented privileged setter that bypasses signatures), and **I-01**, the lack of protection on the implementation contract — its `merchant()` returns a garbage bytecode-derived address rather than reverting, so funds sent there are lost, though it cannot be taken over. Fix both before mainnet; neither requires changing the clone pattern.
+**Yes — this is the best-engineered part of the system.** Solady's CWIA pattern (`cloneDeterministic`, `:503-533`) with `merchant` as immutable args read from clone bytecode (tamper-proof, no storage to corrupt) and `FACTORY` immutable in the implementation so that one `setOperator` reaches every vault. There is no initializer race, no squatting, and no upgrade surface. The `EIP712` constructor-immutable caching is *compatible* with clones because of the explicit `address(this)` invalidation check — correct, though it means the cache never hits (I-03). Two caveats: the implementation is not explicitly inert — `merchant()` returns deterministic garbage rather than reverting (L-02, verified by tracing the `argsOnClone` assembly) — and its safety rests on `initPayout` being factory-gated rather than on any implementation-level guard.
 
 **Is the current architecture appropriate for handling real funds?**
-**No.** Three independent blockers, in order:
+**Not yet.** The vault mechanics, clone isolation, signature scheme, and atomic transfer layer are sound and would be appropriate. The money model is not: the operator can steal via creation-time payout choice (C-01) or confiscate via the split (H-01); the merchant has no exit and can be censored indefinitely (H-02); the split is unverifiable and the backend that should compute it does not exist (H-03); there is no token allowlist (H-04); fee outflows are unlogged (M-01); and the build target is unpinned against a Celo deployment (M-02) with a stale deployment artifact on disk (M-08). Requirement 9 ("a compromised operator must have the smallest practical blast radius") is not met: the blast radius today is *every vault's entire balance*, and requirement 10's guarantee holds against third parties but not against the operator.
 
-1. **The fee destination is operator-chosen and the split is unenforced**, so a single key compromise is total, silent loss across every vault (C-01, C-02). Requirement #9 is unmet in full.
-2. **The merchant has no way to withdraw their own funds under any circumstances** — and the operator that can can also be permanently disabled by one bad `setOperator` call, freezing every vault forever (H-04).
-3. **Nothing is wired up.** The backend computes no fee, signs nothing, calls no contract, and never reads its own `OPERATOR_KEY`. There is no chain client and no contract address configured (I-02).
-
-Point 3 is the silver lining: the vulnerabilities are not yet reachable in production, so the fixes can land before the integration does. Fix items 1–4 of §5 — immutable fee recipient, recorded ledger with bounded credits, code-enforced fee rate, and a merchant withdrawal path — and this becomes a defensible design. Ship it in the current form and the first operator compromise or owner mistake is unrecoverable.
+Fix 5.1 and 5.2 and the core proposition — "the operator can trigger legitimate withdrawals but cannot redirect merchant funds without merchant authorization" — becomes true. Until then it is not.
 
 ---
 
-## 9. Prioritized changes before mainnet
+## 9. Prioritized pre-mainnet list
 
-**Blockers — do not deploy with real funds until these are done.**
+Ordered by risk reduced per unit of change. Items 1–3 are the ones that decide whether this can hold real money.
 
-| # | Change | Finding | Effort |
-|---|---|---|---|
-| 1 | Remove `feeRecipient` from `withdrawAll`; make the fee recipient(s) immutable on the factory | C-01 | Small |
-| 2 | Add `merchantBalance`/`feeBalance` per token; cap every withdrawal leg by the recorded balance; add `ReentrancyGuard` **and** strict CEI ordering in the same change | C-02, M-04, L-02 | Medium — the core work |
-| 3 | Enforce the fee rate in code from an operator-reported gross (`feeBps` immutable, capped); never let the operator choose the split | C-02 | Medium |
-| 4 | Add a merchant withdrawal path gated on `msg.sender == merchant()` | H-04 | Small |
-| 5 | Create every vault with `payout = merchant`; delete the `payout` parameter, or require `msg.sender == merchant` when it differs | H-02 | Small |
-| 6 | Add `if (newOperator == address(0)) revert InvalidAddress();` to `setOperator` | H-04 | Trivial |
-| 7 | Guard `initPayout` one-shot, or delete it in favour of a clone arg | H-03 | Small |
-| 8 | Resolve the payout-authorization model (merchant vs previous payout) and make code, brief, backend comments and frontend copy agree | H-01 | Decision, then small |
+| # | Change | Closes | Size | Why now |
+| --- | --- | --- | --- | --- |
+| 1 | **`createVault`: an operator may not choose a payout other than the merchant's own address** (§5.1) | **C-01** | 3 lines | The only remaining path to total theft with no merchant signature. Fixes the "operator cannot redirect funds" property outright. |
+| 2 | **Bound the fee leg** — owner-set `maxFeeBps` enforced in `withdraw` (§5.2) | **H-01** | ~10 lines | Removes the operator's ability to declare 100% of a balance a "fee". |
+| 3 | **Merchant exit path** — bounded by a recorded entitlement, or an explicit documented statement that none exists (§5.3) | **H-02** | Medium–Large | Without it, a lost operator key plus a lost owner key is total loss, and the merchant has no recourse. |
+| 4 | **Token allowlist + written token assumptions** (§5.4) | **H-04** | Small–Medium | Converts silent ledger drift into a deploy-time rejection. |
+| 5 | **Pin `evm_version`** after confirming the target chain's revision; add a pinned CI job (§5.7) | **M-02** | 1 line + CI | A wrong target is a funds-received-then-unreachable failure. Must be settled before any deploy. |
+| 6 | **Delete/regenerate the stale `broadcast/` artifact; keystore signing; required `OPERATOR`; fork test of the deploy script** (§5.7) | **M-08** | Small | The artifact on disk deploys the *previous* factory; the script leaks a raw key while documenting a keystore. |
+| 7 | **Build the backend settlement ledger, or explicitly declare the trust boundary** (§5.2/H-03) | **H-03** | Large | The invariant `gross = merchant + x402Go + facilitator` must be owned by something. Today it is owned by nothing. |
+| 8 | **`withdrawFees` event; consider an immutable `feeRecipient`** (§5.6) | **M-01** | Small | Makes fee outflows observable; the fee destination is currently owner-chosen at sweep time and unlogged. |
+| 9 | **Two-step timelocked `setOperator`; override `renounceOwnership`; reject a zero operator in the constructor; move ownership to a multisig** (§5.5) | **M-06, M-07** | Small–Medium | The owner key is the only recovery lever; it should not be able to destroy that lever or install a thief atomically. |
+| 10 | **Decide and document the fee model: two legs or three** (§5.3 M-05) | **M-05** | Small (decision) | Determines whether `facilitatorFee` is netted by convention or paid directly. Cheap now, a redeploy later. |
+| 11 | **Merchant authority rotation; document that the merchant key must not be a browser hot wallet** (§5.3 M-03) | **M-03** | Medium | Turns a permanent key compromise into a recoverable one. |
+| 12 | **Explicit low-s check, or document malleability and dedupe by nonce off chain** (§5.3 M-04) | **M-04** | 1 line | Prevents idempotency bugs in the settlement API before that API exists. |
+| 13 | **Reject `payout == address(this)` and `payout == FACTORY`** (§5.3 L-01) | **L-01** | 2 lines | Unambiguous mistakes with no legitimate use. |
+| 14 | **Make the implementation explicitly inert; document that it must never hold value** (§5.3 L-02) | **L-02** | Small | Removes reliance on incidental safety. |
+| 15 | **Add `[invariant]` tests and the §6.1 test list** | Coverage | Medium | Unit tests cannot express "the sum of all fee legs equals the factory balance". |
+| 16 | **Distinct error names per contract** (§5.3 I-01) | I-01 | 2 lines | Cosmetic, but cheap while nothing depends on the current selectors. |
 
-**Strongly recommended before mainnet.**
+**Sequencing.** 1, 2, 5, 6, 13 and 16 are small, independent, and can land together as one change with their tests — that single batch is enough to make the core security proposition true and the deployment path safe. 3, 4, 7 and 11 are the medium-term items and should be designed before the backend is built, so the backend and the chain share one shape rather than two. Item 7 in particular should be settled *before* the settlement ledger is written, not after — it determines whether the backend is a system of record or a convenience layer over an on-chain one.
 
-| # | Change | Finding |
-|---|---|---|
-| 9 | Add `deadline` to `ChangePayout`; bump the domain version | M-01, M-06 |
-| 10 | Emit `PayoutChanged`, `Withdrawn`, `OperatorChanged`, `SettlementRecorded` | M-02 |
-| 11 | Owner-managed settlement-token allowlist | M-05, M-04, L-01 |
-| 12 | Decide and document the fee-recipient shape for `facilitatorFee` vs `x402GoFee` | M-03 |
-| 13 | Rotate the operator key; hold it only in the backend secret manager, never in a developer `contracts/.env` | I-05 |
-| 14 | Write `docs/settlement.md` — the flow spec the tests are written against | I-03 |
-
-**Recommended.**
-
-| # | Change | Finding |
-|---|---|---|
-| 15 | Decide on low-s enforcement; rename the misleading malleability test either way | L-05 |
-| 16 | Make the implementation contract inert (`merchant()` reverts without clone args) | I-01 |
-| 17 | Standardise on two-step ownership handover for the factory | L-06 |
-| 18 | `unchecked { ++i; }` in the withdrawal loop | Gas |
-| 19 | Document ERC-20-only and the implementation-address warning | I-06, I-01 |
-| 20 | Correct the OpenZeppelin references in the brief/deps; record the Solady malleability difference | I-04 |
-
-**Suggested sequencing:** items 1–8 together as one change (they are interdependent — 2 and 5 both touch `createVault`/`withdrawAll`, and 8 determines what the tests in 1–7 must assert), with the §6 regression tests landing alongside. Then 9–14. Then build the backend integration (I-02) **against** the fixed contracts, not before.
-
----
-
-*Audit conducted without modifying any contract source. The temporary PoC test file was executed against the working tree and removed afterwards.*
-
-*Working-tree state, recorded for transparency: `git status` shows the audit's own addition (`contracts/AUDIT.md`, untracked) plus changes that were already present before the audit began and are **not** logic changes — a `[fmt]` section added to `foundry.toml`, `forge fmt` reflow of the test files (multi-line signatures joined; verified by test-function count, `X402Vault.t.sol` 92 → 92 and `X402VaultFactory.t.sol` 46 → 46, so no test was removed), trailing-whitespace trims in the deploy script, and NatSpec comments in the two `src/` files. A whitespace-ignoring diff of `contracts/src/` yields no code change beyond a single `}` line-ending artifact, so no contract behaviour differs from `HEAD`.*
+**What not to build.** No upgrade proxy, no `nonReentrant`, no OpenZeppelin migration. Each adds surface without addressing a finding in this report (§5.8).
