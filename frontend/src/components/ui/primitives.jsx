@@ -175,7 +175,7 @@ async function writeToClipboard(value) {
   }
 }
 
-export function CopyButton({ value, label = 'Copy', className }) {
+export function CopyButton({ value, label = 'Copy', className, ariaLabel }) {
   const [state, setState] = useState('idle');
   const timer = useRef(null);
 
@@ -199,7 +199,11 @@ export function CopyButton({ value, label = 'Copy', className }) {
         className={className}
         onClick={copy}
         disabled={!value}
-        aria-label={`${label} to clipboard`}
+        // A page with a dozen code samples has a dozen of these, and "Copy to
+        // clipboard" twelve times tells a screen-reader user nothing about
+        // which one they are on. `ariaLabel` names the sample; the visible
+        // label stays short because the button sits in a labelled block.
+        aria-label={ariaLabel ?? `${label} to clipboard`}
       >
         {state === 'copied' ? 'Copied' : state === 'failed' ? 'Copy failed' : label}
       </Button>

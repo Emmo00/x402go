@@ -7,6 +7,12 @@
  */
 export const API_KEY_ROUTE = '/signup';
 
+/** The integration guide. Public, and outside the dashboard's auth gate. */
+export const DOCS_ROUTE = '/docs';
+
+/** The raw agent-facing guide, served by the backend — not a frontend route. */
+export const SKILL_MD_PATH = '/skill.md';
+
 export const DASHBOARD_ROUTES = {
   root: '/dashboard',
   overview: '/dashboard/overview',
