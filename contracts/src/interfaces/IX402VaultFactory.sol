@@ -7,10 +7,12 @@ interface IX402VaultFactory {
     error LengthMismatch();
 
     event VaultCreated(address indexed merchant, address indexed vault, address payout);
-    event OperatorChanged(address indexed previousOperator, address indexed newOperator);
     event FeeUpdated(address indexed token, uint16 newFee);
-
-    function operator() external view returns (address);
+    event FeesWithdrawn(address indexed token, address indexed recipient, uint256 amount);
 
     function tokenFee(address token) external view returns (uint256);
+
+    /// @dev The configured fee for `token`, in basis points. Zero means the token is not
+    /// supported, and a vault will refuse to settle it.
+    function tokenFeeBPS(address token) external view returns (uint16);
 }

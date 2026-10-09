@@ -7,17 +7,32 @@ import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {X402Base} from "./utils/X402Base.sol";
 import {X402Vault} from "../src/X402Vault.sol";
 import {X402VaultFactory} from "../src/X402VaultFactory.sol";
-import {MockERC20, NoReturnToken, RevertingToken} from "./utils/Mocks.sol";
+import {IX402Vault} from "../src/interfaces/IX402Vault.sol";
+import {IX402VaultFactory} from "../src/interfaces/IX402VaultFactory.sol";
+import {MockERC20, NoReturnToken, RevertingToken, LowDecimalToken} from "./utils/Mocks.sol";
 
 contract X402VaultFactoryTest is X402Base {
     event VaultCreated(address indexed merchant, address indexed vault, address payout);
     event OperatorChanged(address indexed previousOperator, address indexed newOperator);
+    event FeeUpdated(address indexed token, uint16 newFee);
+    event FeesWithdrawn(address indexed token, address indexed recipient, uint256 amount);
 
     address internal payoutAddr;
 
     function setUp() public override {
         super.setUp();
         payoutAddr = makeAddr("payout");
+    }
+
+    /// @dev Configures a single token's fee in the factory, as the owner.
+    function _setFees(address t, uint16 bps) internal {
+        address[] memory tokens = new address[](1);
+        tokens[0] = t;
+        uint16[] memory bpsList = new uint16[](1);
+        bpsList[0] = bps;
+
+        vm.prank(owner);
+        factory.setTokenFees(tokens, bpsList);
     }
 
     // ============================================================ constructor
@@ -55,7 +70,7 @@ contract X402VaultFactoryTest is X402Base {
     function test_constructor_implementationIsBoundToFactory() public {
         address impl = factory.implementation();
         // Only the factory may call initPayout on the implementation.
-        vm.expectRevert(X402Vault.Unauthorized.selector);
+        vm.expectRevert(IX402Vault.Unauthorized.selector);
         X402Vault(impl).initPayout(payoutAddr);
 
         vm.prank(address(factory));
@@ -78,7 +93,7 @@ contract X402VaultFactoryTest is X402Base {
 
         vm.expectEmit(true, true, false, true, address(factory));
         emit VaultCreated(merchant, predicted, merchant);
-        vm.expectCall(predicted, abi.encodeWithSelector(X402Vault.initPayout.selector), 0);
+        vm.expectCall(predicted, abi.encodeWithSelector(IX402Vault.initPayout.selector), 0);
 
         vm.prank(merchant);
         address vault = factory.createVault(merchant, merchant);
@@ -114,7 +129,7 @@ contract X402VaultFactoryTest is X402Base {
         // The vault's one-shot initialiser is already spent after creation, so neither the
         // factory nor anyone else can move the payout behind the merchant's back.
         vm.prank(address(factory));
-        vm.expectRevert(X402Vault.AlreadyInitialized.selector);
+        vm.expectRevert(IX402Vault.AlreadyInitialized.selector);
         X402Vault(vault).initPayout(stranger);
         assertEq(X402Vault(vault).payout(), payoutAddr);
     }
@@ -162,20 +177,20 @@ contract X402VaultFactoryTest is X402Base {
 
     function test_createVault_revertsOnZeroMerchant() public {
         vm.prank(operator);
-        vm.expectRevert(X402VaultFactory.InvalidAddress.selector);
+        vm.expectRevert(IX402VaultFactory.InvalidAddress.selector);
         factory.createVault(address(0), payoutAddr);
     }
 
     function test_createVault_revertsOnZeroPayout() public {
         vm.prank(merchant);
-        vm.expectRevert(X402VaultFactory.InvalidAddress.selector);
+        vm.expectRevert(IX402VaultFactory.InvalidAddress.selector);
         factory.createVault(merchant, address(0));
     }
 
     function test_createVault_zeroChecksRunBeforeAuthorization() public {
         // A stranger sees InvalidAddress, not Unauthorized: documents check ordering.
         vm.prank(stranger);
-        vm.expectRevert(X402VaultFactory.InvalidAddress.selector);
+        vm.expectRevert(IX402VaultFactory.InvalidAddress.selector);
         factory.createVault(address(0), payoutAddr);
     }
 
@@ -212,7 +227,7 @@ contract X402VaultFactoryTest is X402Base {
 
         uint256 g = gasleft();
         vm.prank(merchant);
-        vm.expectRevert(X402VaultFactory.VaultExists.selector);
+        vm.expectRevert(IX402VaultFactory.VaultExists.selector);
         factory.createVault(merchant, merchant);
         // A raw CREATE2 collision would burn ~all forwarded gas; the pre-check must not.
         assertLt(g - gasleft(), 100_000);
@@ -224,7 +239,7 @@ contract X402VaultFactoryTest is X402Base {
     function test_createVault_duplicateByOperatorReverts() public {
         _deploy(merchant, merchant);
         vm.prank(operator);
-        vm.expectRevert(X402VaultFactory.VaultExists.selector);
+        vm.expectRevert(IX402VaultFactory.VaultExists.selector);
         factory.createVault(merchant, payoutAddr);
     }
 
@@ -233,7 +248,7 @@ contract X402VaultFactoryTest is X402Base {
         vm.prank(owner);
         factory.setOperator(stranger);
         vm.prank(merchant);
-        vm.expectRevert(X402VaultFactory.VaultExists.selector);
+        vm.expectRevert(IX402VaultFactory.VaultExists.selector);
         factory.createVault(merchant, merchant);
     }
 
@@ -289,7 +304,7 @@ contract X402VaultFactoryTest is X402Base {
         // Rotation is also the key-loss recovery path, so it must not be possible to
         // "recover" into a state where no one can withdraw.
         vm.prank(owner);
-        vm.expectRevert(X402VaultFactory.InvalidAddress.selector);
+        vm.expectRevert(IX402VaultFactory.InvalidAddress.selector);
         factory.setOperator(address(0));
         assertEq(factory.operator(), operator);
     }
@@ -339,6 +354,105 @@ contract X402VaultFactoryTest is X402Base {
         factory.createVault(merchant, merchant);
     }
 
+    // ============================================================ fee configuration
+
+    /// @dev `tokenFeeBPS` is public because the vault reads it on every settlement: zero means
+    /// "not supported", so this mapping is the settlement allowlist as well as the fee schedule.
+    function test_setTokenFees_ownerConfiguresAndGetterExposesBPS() public {
+        LowDecimalToken t2 = new LowDecimalToken();
+
+        assertEq(factory.tokenFeeBPS(address(token)), 0, "unset by default");
+
+        address[] memory tokens = new address[](2);
+        tokens[0] = address(token);
+        tokens[1] = address(t2);
+        uint16[] memory bps = new uint16[](2);
+        bps[0] = 10;
+        bps[1] = 100;
+
+        vm.expectEmit(true, false, false, true, address(factory));
+        emit FeeUpdated(address(token), 10);
+        vm.expectEmit(true, false, false, true, address(factory));
+        emit FeeUpdated(address(t2), 100);
+
+        vm.prank(owner);
+        factory.setTokenFees(tokens, bps);
+
+        assertEq(factory.tokenFeeBPS(address(token)), 10);
+        assertEq(factory.tokenFeeBPS(address(t2)), 100);
+    }
+
+    /// @dev The fee is derived from the token's own decimals, so one BPS configuration produces the
+    /// right absolute amount for tokens of any precision — which is why no per-token absolute fee
+    /// is stored.
+    function test_tokenFee_scalesWithTokenDecimals() public {
+        LowDecimalToken t2 = new LowDecimalToken(); // 2 decimals
+
+        address[] memory tokens = new address[](2);
+        tokens[0] = address(token);
+        tokens[1] = address(t2);
+        uint16[] memory bps = new uint16[](2);
+        bps[0] = 10; // 0.10%
+        bps[1] = 100; // 1.00%
+
+        vm.prank(owner);
+        factory.setTokenFees(tokens, bps);
+
+        // 10 bps of one whole 18-decimal token, and 100 bps of one whole 2-decimal token.
+        assertEq(factory.tokenFee(address(token)), 1e15);
+        assertEq(factory.tokenFee(address(t2)), 1);
+    }
+
+    /// @dev A token with too few decimals and too small a BPS computes a fee of zero. The vault
+    /// refuses to settle it, so this is a loud misconfiguration rather than a silent free ride.
+    function test_tokenFee_roundsDownToZeroForLowDecimalTokens() public {
+        LowDecimalToken t2 = new LowDecimalToken(); // 2 decimals
+        _setFees(address(t2), 1);
+
+        assertEq(factory.tokenFeeBPS(address(t2)), 1, "configured");
+        assertEq(factory.tokenFee(address(t2)), 0, "1 * 10**2 / 10000 rounds to nothing");
+    }
+
+    function test_setTokenFees_canBeResetToZero() public {
+        _setFees(address(token), 10);
+        assertEq(factory.tokenFeeBPS(address(token)), 10);
+
+        _setFees(address(token), 0);
+        assertEq(factory.tokenFeeBPS(address(token)), 0, "zero is the off switch");
+    }
+
+    function test_setTokenFees_lengthMismatchReverts() public {
+        address[] memory tokens = new address[](1);
+        tokens[0] = address(token);
+        uint16[] memory bps = new uint16[](2);
+
+        vm.prank(owner);
+        vm.expectRevert(IX402VaultFactory.LengthMismatch.selector);
+        factory.setTokenFees(tokens, bps);
+    }
+
+    function test_setTokenFees_onlyOwner() public {
+        address[] memory tokens = new address[](1);
+        tokens[0] = address(token);
+        uint16[] memory bps = new uint16[](1);
+        bps[0] = 10;
+
+        vm.prank(stranger);
+        vm.expectRevert(Ownable.Unauthorized.selector);
+        factory.setTokenFees(tokens, bps);
+        assertEq(factory.tokenFeeBPS(address(token)), 0);
+    }
+
+    function testFuzz_setTokenFees_roundTripsEveryBPS(uint16 bps) public {
+        _setFees(address(token), bps);
+        assertEq(factory.tokenFeeBPS(address(token)), bps);
+
+        // The derived absolute fee is exactly the configured share of one whole 18-decimal token.
+        // `bps` is not range-checked by the factory, and it does not need to be: the vault requires
+        // `value > fee`, so an out-of-range fee makes settlement impossible rather than mis-paying.
+        assertEq(factory.tokenFee(address(token)), (uint256(bps) * 1e18) / 10000);
+    }
+
     // ============================================================ withdrawFees
 
     function test_withdrawFees_onlyOwner() public {
@@ -355,17 +469,59 @@ contract X402VaultFactoryTest is X402Base {
     function test_withdrawFees_rejectsZeroRecipient() public {
         token.mint(address(factory), 100);
         vm.prank(owner);
-        vm.expectRevert(X402VaultFactory.InvalidAddress.selector);
+        vm.expectRevert(IX402VaultFactory.InvalidAddress.selector);
         factory.withdrawFees(_arr(address(token)), address(0));
         assertEq(token.balanceOf(address(factory)), 100);
     }
 
     function test_withdrawFees_sendsFullBalanceToRecipient() public {
         token.mint(address(factory), 100);
+
+        vm.expectEmit(true, true, false, true, address(factory));
+        emit FeesWithdrawn(address(token), feeRecipient, 100);
+
         vm.prank(owner);
         factory.withdrawFees(_arr(address(token)), feeRecipient);
         assertEq(token.balanceOf(feeRecipient), 100);
         assertEq(token.balanceOf(address(factory)), 0);
+    }
+
+    /// @dev One event per listed token, emitted even when the swept balance is zero: the event is
+    /// the record that the token was visited, which a second sweep over a drained token would
+    /// otherwise be indistinguishable from.
+    function test_withdrawFees_emitsOncePerTokenIncludingEmptyOnes() public {
+        MockERC20 empty = new MockERC20();
+        token.mint(address(factory), 7);
+
+        address[] memory t = new address[](2);
+        t[0] = address(token);
+        t[1] = address(empty);
+
+        vm.expectEmit(true, true, false, true, address(factory));
+        emit FeesWithdrawn(t[0], feeRecipient, 7);
+        vm.expectEmit(true, true, false, true, address(factory));
+        emit FeesWithdrawn(t[1], feeRecipient, 0);
+
+        vm.prank(owner);
+        factory.withdrawFees(t, feeRecipient);
+
+        assertEq(token.balanceOf(feeRecipient), 7);
+        assertEq(empty.balanceOf(feeRecipient), 0);
+    }
+
+    /// @dev A repeat sweep is observable rather than silent: same token, same recipient, amount 0.
+    function test_withdrawFees_repeatSweepEmitsAZeroAmount() public {
+        token.mint(address(factory), 40);
+
+        vm.startPrank(owner);
+        factory.withdrawFees(_arr(address(token)), feeRecipient);
+
+        vm.expectEmit(true, true, false, true, address(factory));
+        emit FeesWithdrawn(address(token), feeRecipient, 0);
+        factory.withdrawFees(_arr(address(token)), feeRecipient);
+        vm.stopPrank();
+
+        assertEq(token.balanceOf(feeRecipient), 40);
     }
 
     function test_withdrawFees_multiToken() public {
@@ -442,21 +598,30 @@ contract X402VaultFactoryTest is X402Base {
         factory.withdrawFees(_arr(address(token)), feeRecipient);
     }
 
-    // ---- fees land in the factory as a direct result of a vault withdrawal
+    // ---- fees land in the factory as a direct result of a settlement
 
-    function test_withdrawFees_sweepsFeesProducedByVaultWithdrawals() public {
+    function test_withdrawFees_sweepsFeesProducedBySettlements() public {
         address vault = _deploy(merchant, merchant);
-        token.mint(vault, 100);
+        _setFees(address(token), 10);
 
-        vm.prank(operator);
-        X402Vault(vault).withdraw(_arr(address(token)), _arr(uint256(90)), _arr(uint256(10)));
-        assertEq(token.balanceOf(address(factory)), 10, "vault routed the fee leg to the factory");
+        uint256 value = 1e18;
+        uint256 fee = factory.tokenFee(address(token));
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, value);
+
+        vm.prank(stranger); // settle is permissionless
+        X402Vault(vault).settle(address(token), _auth3009(payerPk, address(token), vault, value, keccak256("f")));
+
+        assertEq(token.balanceOf(address(factory)), fee, "the vault routed the fee leg to the factory");
+        assertEq(token.balanceOf(merchant), value - fee, "the merchant was paid in the same transaction");
 
         vm.prank(owner);
         factory.withdrawFees(_arr(address(token)), feeRecipient);
-        assertEq(token.balanceOf(feeRecipient), 10);
+
+        assertEq(token.balanceOf(feeRecipient), fee);
         assertEq(token.balanceOf(address(factory)), 0);
-        assertEq(token.balanceOf(merchant), 90, "merchant funds untouched by the fee sweep");
+        assertEq(token.balanceOf(merchant), value - fee, "merchant funds untouched by the fee sweep");
     }
 
     // ============================================================ ownership (Solady Ownable)
@@ -563,7 +728,7 @@ contract X402VaultFactoryTest is X402Base {
         assertEq(vault, predicted);
         // and a second attempt with any other payout always collides
         vm.prank(operator);
-        vm.expectRevert(X402VaultFactory.VaultExists.selector);
+        vm.expectRevert(IX402VaultFactory.VaultExists.selector);
         factory.createVault(m, p2);
     }
 
@@ -601,7 +766,7 @@ contract X402VaultFactoryTest is X402Base {
         if (caller != owner) {
             vm.expectRevert(Ownable.Unauthorized.selector);
         } else {
-            vm.expectRevert(X402VaultFactory.InvalidAddress.selector);
+            vm.expectRevert(IX402VaultFactory.InvalidAddress.selector);
         }
         factory.setOperator(address(0));
         assertEq(factory.operator(), operator);

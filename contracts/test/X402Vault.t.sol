@@ -6,20 +6,25 @@ import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {X402Base} from "./utils/X402Base.sol";
 import {X402Vault} from "../src/X402Vault.sol";
 import {X402VaultFactory} from "../src/X402VaultFactory.sol";
+import {IX402Vault} from "../src/interfaces/IX402Vault.sol";
 import {
     MockERC20,
-    NoReturnToken,
-    FalseReturnToken,
-    RevertingToken,
+    FalsePayoutToken,
+    RevertingPayoutToken,
+    FeeOnTransferToken,
+    LowDecimalToken,
     ReentrantToken,
+    MockPermit2,
     Mock1271Wallet,
     Reverting1271Wallet
 } from "./utils/Mocks.sol";
 
 contract X402VaultTest is X402Base {
-    /// @dev Mirrors the vault's own event so `vm.expectEmit` can match it exactly.
+    /// @dev Mirrors the vault's own events so `vm.expectEmit` can match them exactly.
     event PayoutChanged(address indexed merchant, address indexed newPayout);
-    event Withdrawn(address indexed merchant, address indexed token, uint256 merchantAmount, uint256 feeAmount);
+    event Settle(
+        address indexed payout, address indexed token, address indexed payer, uint256 merchantAmount, uint256 feeAmount
+    );
 
     X402Vault internal vault; // payout == merchant (no storage written)
     X402Vault internal customVault; // payout override set at creation
@@ -27,6 +32,9 @@ contract X402VaultTest is X402Base {
     uint256 internal customPk;
     address internal customMerchant;
     address internal payoutAddr;
+
+    /// @dev 10 bps: the fee used by most settlement tests.
+    uint16 internal constant BPS = 10;
 
     function setUp() public override {
         super.setUp();
@@ -46,10 +54,37 @@ contract X402VaultTest is X402Base {
         v.changePayout(newPayout, dl, _sig(pk, address(v), newPayout, v.nonce(), dl));
     }
 
-    /// @dev Fees always go to the factory, which is the immutable fee recipient.
-    function _withdraw(X402Vault v, address[] memory t, uint256[] memory m, uint256[] memory f) internal {
-        vm.prank(operator);
-        v.withdraw(t, m, f);
+    /// @dev Allowlists `t` in the factory at `bps`. A vault refuses to settle anything the factory
+    /// has not configured, so nearly every settlement test starts here.
+    function _configure(MockERC20 t, uint16 bps) internal {
+        address[] memory tokens = new address[](1);
+        tokens[0] = address(t);
+        uint16[] memory bpsList = new uint16[](1);
+        bpsList[0] = bps;
+
+        vm.prank(owner);
+        factory.setTokenFees(tokens, bpsList);
+    }
+
+    /// @dev The fee the factory charges for `t`, in `t`'s own units.
+    function _fee(MockERC20 t) internal view returns (uint256) {
+        return factory.tokenFee(address(t));
+    }
+
+    /// @dev Relays an EIP-3009 settlement from an unrelated account — `settle` is permissionless,
+    /// and every test should prove it rather than accidentally relying on one caller.
+    function _pay(uint256 pk, X402Vault v, MockERC20 t, uint256 value, bytes32 authNonce) internal {
+        vm.prank(stranger);
+        v.settle(address(t), _auth3009(pk, address(t), address(v), value, authNonce));
+    }
+
+    /// @dev As {_pay}, for the Permit2 path. `pk` must have approved Permit2 for `t`.
+    function _payWithPermit2(uint256 pk, X402Vault v, MockERC20 t, uint256 value, uint256 permitNonce) internal {
+        (IX402Vault.Permit2Authorization memory auth, bytes memory signature) =
+            _permit2Auth(pk, SafeTransferLib.PERMIT2, address(v), address(t), value, permitNonce);
+
+        vm.prank(stranger);
+        v.settleWithPermit2(address(t), auth, signature);
     }
 
     function _flip(bytes memory sig65) internal pure returns (bytes memory out) {
@@ -99,7 +134,7 @@ contract X402VaultTest is X402Base {
         address[4] memory callers = [stranger, operator, owner, merchant];
         for (uint256 i; i < callers.length; ++i) {
             vm.prank(callers[i]);
-            vm.expectRevert(X402Vault.Unauthorized.selector);
+            vm.expectRevert(IX402Vault.Unauthorized.selector);
             vault.initPayout(payoutAddr);
         }
         vm.prank(address(factory));
@@ -114,7 +149,7 @@ contract X402VaultTest is X402Base {
 
         // A second call — even by the factory, even to the same address — is refused.
         vm.prank(address(factory));
-        vm.expectRevert(X402Vault.AlreadyInitialized.selector);
+        vm.expectRevert(IX402Vault.AlreadyInitialized.selector);
         vault.initPayout(stranger);
         assertEq(vault.payout(), payoutAddr, "payout unchanged by the rejected call");
     }
@@ -123,7 +158,7 @@ contract X402VaultTest is X402Base {
         // A payout change writes the same slot, so it also closes the initialiser.
         _change(vault, merchantPk, payoutAddr);
         vm.prank(address(factory));
-        vm.expectRevert(X402Vault.AlreadyInitialized.selector);
+        vm.expectRevert(IX402Vault.AlreadyInitialized.selector);
         vault.initPayout(stranger);
         assertEq(vault.payout(), payoutAddr);
     }
@@ -132,7 +167,7 @@ contract X402VaultTest is X402Base {
         // Zero must be refused: the one-shot guard keys off the slot being non-zero, so
         // accepting zero would leave the vault re-initialisable.
         vm.prank(address(factory));
-        vm.expectRevert(X402Vault.InvalidAddress.selector);
+        vm.expectRevert(IX402Vault.InvalidAddress.selector);
         vault.initPayout(address(0));
         assertEq(vault.payout(), merchant, "still the fallback");
 
@@ -146,14 +181,14 @@ contract X402VaultTest is X402Base {
         vm.prank(address(factory));
         vault.initPayout(payoutAddr);
         vm.prank(address(factory));
-        vm.expectRevert(X402Vault.InvalidAddress.selector); // zero wins, not AlreadyInitialized
+        vm.expectRevert(IX402Vault.InvalidAddress.selector); // zero wins, not AlreadyInitialized
         vault.initPayout(address(0));
     }
 
     function test_implementation_isNotUsableAsVaultForOthers() public {
         // The implementation itself can only be poked by the factory.
         X402Vault impl = X402Vault(factory.implementation());
-        vm.expectRevert(X402Vault.Unauthorized.selector);
+        vm.expectRevert(IX402Vault.Unauthorized.selector);
         impl.initPayout(payoutAddr);
     }
 
@@ -171,7 +206,7 @@ contract X402VaultTest is X402Base {
         uint256 dl = _deadline();
         bytes memory sig = _sig(merchantPk, address(vault), payoutAddr, 0, dl);
         // same merchant key, but customVault belongs to another merchant AND has another domain
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         customVault.changePayout(payoutAddr, dl, sig);
     }
 
@@ -181,7 +216,7 @@ contract X402VaultTest is X402Base {
         address v2 = f2.make(merchant);
         uint256 dl = _deadline();
         bytes memory sig = _sig(merchantPk, address(vault), payoutAddr, 0, dl);
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         X402Vault(v2).changePayout(payoutAddr, dl, sig);
     }
 
@@ -190,7 +225,7 @@ contract X402VaultTest is X402Base {
         bytes memory oldSig = _sig(merchantPk, address(vault), payoutAddr, 0, dl);
         vm.chainId(block.chainid + 1);
 
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(payoutAddr, dl, oldSig);
 
         bytes memory newSig = _sig(merchantPk, address(vault), payoutAddr, 0, dl);
@@ -279,7 +314,7 @@ contract X402VaultTest is X402Base {
         bytes memory sig = _sig(fakePk, address(vault), stranger, 1, dl);
 
         vm.prank(fakeSigner);
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(stranger, dl, sig);
         assertEq(vault.payout(), payoutAddr);
         assertEq(vault.nonce(), 1);
@@ -294,7 +329,7 @@ contract X402VaultTest is X402Base {
         uint256 dl = _deadline();
         bytes memory sig = _sig(opPk, address(vault), payoutAddr, 0, dl);
         vm.prank(opWithKey);
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(payoutAddr, dl, sig);
     }
 
@@ -303,7 +338,7 @@ contract X402VaultTest is X402Base {
     function test_changePayout_expiredDeadlineReverts() public {
         uint256 dl = block.timestamp - 1;
         bytes memory sig = _sig(merchantPk, address(vault), payoutAddr, 0, dl);
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(payoutAddr, dl, sig);
         assertEq(vault.nonce(), 0);
     }
@@ -317,7 +352,7 @@ contract X402VaultTest is X402Base {
 
     function test_changePayout_zeroDeadlineAlwaysReverts() public {
         bytes memory sig = _sig(merchantPk, address(vault), payoutAddr, 0, 0);
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(payoutAddr, 0, sig);
     }
 
@@ -326,7 +361,7 @@ contract X402VaultTest is X402Base {
         bytes memory sig = _sig(merchantPk, address(vault), payoutAddr, 0, dl);
         vm.warp(dl + 1);
 
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(payoutAddr, dl, sig);
 
         // The nonce was never consumed, so the merchant can re-sign and proceed.
@@ -338,7 +373,7 @@ contract X402VaultTest is X402Base {
     function test_changePayout_signedDeadlineMustMatchSubmitted() public {
         uint256 dl = _deadline();
         bytes memory sig = _sig(merchantPk, address(vault), payoutAddr, 0, dl);
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(payoutAddr, dl + 1, sig);
     }
 
@@ -347,12 +382,12 @@ contract X402VaultTest is X402Base {
     function test_changePayout_revertsOnZeroPayout() public {
         uint256 dl = _deadline();
         bytes memory sig = _sig(merchantPk, address(vault), address(0), 0, dl);
-        vm.expectRevert(X402Vault.InvalidAddress.selector);
+        vm.expectRevert(IX402Vault.InvalidAddress.selector);
         vault.changePayout(address(0), dl, sig);
     }
 
     function test_changePayout_zeroCheckRunsBeforeSignatureCheck() public {
-        vm.expectRevert(X402Vault.InvalidAddress.selector);
+        vm.expectRevert(IX402Vault.InvalidAddress.selector);
         vault.changePayout(address(0), _deadline(), hex"");
     }
 
@@ -360,7 +395,7 @@ contract X402VaultTest is X402Base {
         uint256 dl = _deadline();
         bytes memory sig = _sig(merchantPk, address(vault), payoutAddr, 0, dl);
         vault.changePayout(payoutAddr, dl, sig);
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(payoutAddr, dl, sig);
     }
 
@@ -372,7 +407,7 @@ contract X402VaultTest is X402Base {
         bytes memory sigA = _sig(merchantPk, address(vault), a, 0, dl);
         vault.changePayout(a, dl, sigA);
         _change(vault, merchantPk, b);
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(a, dl, sigA);
         assertEq(vault.payout(), b);
     }
@@ -380,14 +415,14 @@ contract X402VaultTest is X402Base {
     function test_changePayout_futureNonceReverts() public {
         uint256 dl = _deadline();
         bytes memory sig = _sig(merchantPk, address(vault), payoutAddr, 1, dl);
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(payoutAddr, dl, sig);
     }
 
     function test_changePayout_signedPayoutMismatchReverts() public {
         uint256 dl = _deadline();
         bytes memory sig = _sig(merchantPk, address(vault), payoutAddr, 0, dl);
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(stranger, dl, sig);
     }
 
@@ -396,7 +431,7 @@ contract X402VaultTest is X402Base {
         uint256[3] memory pks = [uint256(0xDEAD), customPk, uint256(0xBEEF)];
         for (uint256 i; i < pks.length; ++i) {
             bytes memory sig = _sig(pks[i], address(vault), payoutAddr, 0, dl);
-            vm.expectRevert(X402Vault.InvalidSignature.selector);
+            vm.expectRevert(IX402Vault.InvalidSignature.selector);
             vault.changePayout(payoutAddr, dl, sig);
         }
     }
@@ -409,7 +444,7 @@ contract X402VaultTest is X402Base {
         uint256 dl = _deadline();
         bytes memory sig = _sig(opPk, address(vault), payoutAddr, 0, dl);
         vm.prank(someOperator);
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(payoutAddr, dl, sig);
     }
 
@@ -417,13 +452,13 @@ contract X402VaultTest is X402Base {
         uint256 dl = _deadline();
         uint256[7] memory lens = [uint256(0), 1, 32, 63, 66, 96, 130];
         for (uint256 i; i < lens.length; ++i) {
-            vm.expectRevert(X402Vault.InvalidSignature.selector);
+            vm.expectRevert(IX402Vault.InvalidSignature.selector);
             vault.changePayout(payoutAddr, dl, new bytes(lens[i]));
         }
     }
 
     function test_changePayout_allZeroSignatureReverts() public {
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(payoutAddr, _deadline(), new bytes(65));
     }
 
@@ -432,14 +467,14 @@ contract X402VaultTest is X402Base {
         (, bytes32 r, bytes32 s) = _rsv(merchantPk, address(vault), payoutAddr, 0, dl);
         uint8[4] memory vs = [uint8(0), 1, 26, 29];
         for (uint256 i; i < vs.length; ++i) {
-            vm.expectRevert(X402Vault.InvalidSignature.selector);
+            vm.expectRevert(IX402Vault.InvalidSignature.selector);
             vault.changePayout(payoutAddr, dl, abi.encodePacked(r, s, vs[i]));
         }
     }
 
     function test_changePayout_signatureOverUnrelatedDigestReverts() public {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(merchantPk, keccak256("not the typed data"));
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(payoutAddr, _deadline(), abi.encodePacked(r, s, v));
     }
 
@@ -448,12 +483,12 @@ contract X402VaultTest is X402Base {
         uint256 dl = _deadline();
         bytes32 structHash = keccak256(abi.encode(CHANGE_PAYOUT_TYPEHASH, payoutAddr, uint256(0), dl));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(merchantPk, structHash);
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(payoutAddr, dl, abi.encodePacked(r, s, v));
     }
 
     function test_changePayout_failedAttemptDoesNotBumpNonceOrPayout() public {
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(payoutAddr, _deadline(), new bytes(65));
         assertEq(vault.nonce(), 0);
         assertEq(vault.payout(), merchant);
@@ -469,9 +504,9 @@ contract X402VaultTest is X402Base {
         vault.changePayout(payoutAddr, dl, twin);
         assertEq(vault.nonce(), 1);
 
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(payoutAddr, dl, sig);
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(payoutAddr, dl, twin);
     }
 
@@ -515,7 +550,7 @@ contract X402VaultTest is X402Base {
         (Mock1271Wallet w, X402Vault v) = _walletVault();
         uint256 dl = _deadline();
         w.approve(_digest(address(v), payoutAddr, 0, dl));
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         v.changePayout(stranger, dl, hex"1234");
     }
 
@@ -524,7 +559,7 @@ contract X402VaultTest is X402Base {
         uint256 dl = _deadline();
         w.approve(_digest(address(v), payoutAddr, 0, dl));
         v.changePayout(payoutAddr, dl, hex"1234");
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         v.changePayout(payoutAddr, dl, hex"1234");
     }
 
@@ -533,14 +568,14 @@ contract X402VaultTest is X402Base {
         uint256 dl = _deadline();
         w.approve(_digest(address(v), payoutAddr, 0, dl));
         w.setMagic(0xdeadbeef);
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         v.changePayout(payoutAddr, dl, hex"1234");
     }
 
     function test_erc1271_revertingWalletReverts() public {
         Reverting1271Wallet w = new Reverting1271Wallet();
         X402Vault v = X402Vault(_deploy(address(w), address(w)));
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         v.changePayout(payoutAddr, _deadline(), hex"1234");
     }
 
@@ -548,333 +583,9 @@ contract X402VaultTest is X402Base {
         (Mock1271Wallet w, X402Vault v) = _walletVault();
         uint256 dl = _deadline();
         bytes memory sig = _sig(merchantPk, address(v), payoutAddr, 0, dl); // some EOA signs; wallet never approved
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         v.changePayout(payoutAddr, dl, sig);
         w; // silence
-    }
-
-    // ============================================================ withdraw: auth & validation
-
-    function test_withdraw_onlyOperator() public {
-        address[5] memory callers = [stranger, owner, merchant, customMerchant, payoutAddr];
-        for (uint256 i; i < callers.length; ++i) {
-            vm.prank(callers[i]);
-            vm.expectRevert(X402Vault.Unauthorized.selector);
-            vault.withdraw(new address[](0), new uint256[](0), new uint256[](0));
-        }
-    }
-
-    function test_withdraw_operatorRotationTakesEffectOnExistingVaults() public {
-        address newOp = makeAddr("newOp");
-        vm.prank(owner);
-        factory.setOperator(newOp);
-
-        vm.prank(operator);
-        vm.expectRevert(X402Vault.Unauthorized.selector);
-        vault.withdraw(new address[](0), new uint256[](0), new uint256[](0));
-
-        vm.prank(newOp);
-        vault.withdraw(new address[](0), new uint256[](0), new uint256[](0));
-    }
-
-    function test_withdraw_zeroOperatorFactoryBlocksEveryone() public {
-        // setOperator rejects zero, but the constructor does not — a factory deployed with a
-        // zero operator has no one who can withdraw.
-        X402VaultFactory f = new X402VaultFactory(owner, address(0));
-        vm.prank(merchant);
-        address v = f.createVault(merchant, merchant);
-
-        address[3] memory callers = [owner, merchant, stranger];
-        for (uint256 i; i < callers.length; ++i) {
-            vm.prank(callers[i]);
-            vm.expectRevert(X402Vault.Unauthorized.selector);
-            X402Vault(v).withdraw(new address[](0), new uint256[](0), new uint256[](0));
-            X402Vault(v);
-        }
-
-        // the owner can still repair it
-        vm.prank(owner);
-        f.setOperator(operator);
-        vm.prank(operator);
-        X402Vault(v).withdraw(new address[](0), new uint256[](0), new uint256[](0));
-    }
-
-    function test_withdraw_lengthMismatches() public {
-        address[] memory t = _arr(address(token));
-        uint256[] memory one = _arr(uint256(1));
-        uint256[] memory two = new uint256[](2);
-        uint256[] memory none = new uint256[](0);
-
-        vm.startPrank(operator);
-        vm.expectRevert(X402Vault.LengthMismatch.selector);
-        vault.withdraw(t, two, one); // merchant amounts longer
-        vm.expectRevert(X402Vault.LengthMismatch.selector);
-        vault.withdraw(t, one, two); // fees longer
-        vm.expectRevert(X402Vault.LengthMismatch.selector);
-        vault.withdraw(t, none, one);
-        vm.expectRevert(X402Vault.LengthMismatch.selector);
-        vault.withdraw(t, one, none);
-        vm.expectRevert(X402Vault.LengthMismatch.selector);
-        vault.withdraw(new address[](0), one, one);
-        vm.stopPrank();
-    }
-
-    function test_withdraw_emptyArraysIsNoOp() public {
-        token.mint(address(vault), 100);
-        _withdraw(vault, new address[](0), new uint256[](0), new uint256[](0));
-        assertEq(token.balanceOf(address(vault)), 100);
-    }
-
-    // ============================================================ withdraw: transfers
-
-    function test_withdraw_sendsFeesToFactory() public {
-        token.mint(address(vault), 1000);
-        _withdraw(vault, _arr(address(token)), _arr(uint256(900)), _arr(uint256(100)));
-        assertEq(token.balanceOf(merchant), 900, "default payout is merchant");
-        assertEq(token.balanceOf(address(factory)), 100, "fees are held by the factory");
-        assertEq(token.balanceOf(feeRecipient), 0, "the operator cannot choose a fee destination");
-        assertEq(token.balanceOf(address(vault)), 0);
-    }
-
-    function test_withdraw_feesAccumulateInFactoryAcrossVaults() public {
-        token.mint(address(vault), 100);
-        token.mint(address(customVault), 100);
-        _withdraw(vault, _arr(address(token)), _arr(uint256(90)), _arr(uint256(10)));
-        _withdraw(customVault, _arr(address(token)), _arr(uint256(80)), _arr(uint256(20)));
-        assertEq(token.balanceOf(address(factory)), 30);
-    }
-
-    function test_withdraw_usesCustomPayout() public {
-        token.mint(address(customVault), 500);
-        _withdraw(customVault, _arr(address(token)), _arr(uint256(400)), _arr(uint256(100)));
-        assertEq(token.balanceOf(payoutAddr), 400);
-        assertEq(token.balanceOf(customMerchant), 0);
-        assertEq(token.balanceOf(address(factory)), 100);
-    }
-
-    function test_withdraw_usesPayoutAfterChange() public {
-        token.mint(address(vault), 100);
-        _change(vault, merchantPk, payoutAddr);
-        _withdraw(vault, _arr(address(token)), _arr(uint256(100)), _arr(uint256(0)));
-        assertEq(token.balanceOf(payoutAddr), 100);
-        assertEq(token.balanceOf(merchant), 0);
-    }
-
-    function test_withdraw_partialWithdrawalLeavesRemainder() public {
-        token.mint(address(vault), 1000);
-        _withdraw(vault, _arr(address(token)), _arr(uint256(300)), _arr(uint256(50)));
-        assertEq(token.balanceOf(address(vault)), 650);
-        assertEq(vault.tokenBalance(address(token)), 650);
-    }
-
-    function test_withdraw_zeroAmountsSkipTransferCalls() public {
-        token.mint(address(vault), 100);
-        vm.expectCall(address(token), abi.encodeWithSelector(token.transfer.selector), 0);
-        _withdraw(vault, _arr(address(token)), _arr(uint256(0)), _arr(uint256(0)));
-        assertEq(token.balanceOf(address(vault)), 100);
-    }
-
-    function test_withdraw_onlyFeeOrOnlyMerchant() public {
-        token.mint(address(vault), 100);
-        _withdraw(vault, _arr(address(token)), _arr(uint256(0)), _arr(uint256(40)));
-        assertEq(token.balanceOf(address(factory)), 40);
-        assertEq(token.balanceOf(merchant), 0);
-
-        _withdraw(vault, _arr(address(token)), _arr(uint256(60)), _arr(uint256(0)));
-        assertEq(token.balanceOf(merchant), 60);
-        assertEq(token.balanceOf(address(vault)), 0);
-    }
-
-    function test_withdraw_multipleTokens() public {
-        MockERC20 t2 = new MockERC20();
-        NoReturnToken t3 = new NoReturnToken();
-        token.mint(address(vault), 10);
-        t2.mint(address(vault), 20);
-        t3.mint(address(vault), 30);
-
-        address[] memory t = new address[](3);
-        t[0] = address(token);
-        t[1] = address(t2);
-        t[2] = address(t3);
-        uint256[] memory m = new uint256[](3);
-        m[0] = 8;
-        m[1] = 15;
-        m[2] = 25;
-        uint256[] memory f = new uint256[](3);
-        f[0] = 2;
-        f[1] = 5;
-        f[2] = 5;
-
-        _withdraw(vault, t, m, f);
-
-        assertEq(token.balanceOf(merchant), 8);
-        assertEq(t2.balanceOf(merchant), 15);
-        assertEq(t3.balanceOf(merchant), 25);
-        assertEq(token.balanceOf(address(factory)), 2);
-        assertEq(t2.balanceOf(address(factory)), 5);
-        assertEq(t3.balanceOf(address(factory)), 5);
-    }
-
-    function test_withdraw_sameTokenListedTwice() public {
-        token.mint(address(vault), 100);
-        address[] memory t = new address[](2);
-        t[0] = address(token);
-        t[1] = address(token);
-        uint256[] memory m = new uint256[](2);
-        m[0] = 30;
-        m[1] = 30;
-        uint256[] memory f = new uint256[](2);
-        f[0] = 10;
-        f[1] = 10;
-        _withdraw(vault, t, m, f);
-        assertEq(token.balanceOf(merchant), 60);
-        assertEq(token.balanceOf(address(factory)), 20);
-        assertEq(token.balanceOf(address(vault)), 20);
-    }
-
-    function test_withdraw_entireBalanceAtUint256Max() public {
-        token.mint(address(vault), type(uint256).max);
-        _withdraw(vault, _arr(address(token)), _arr(type(uint256).max), _arr(uint256(0)));
-        assertEq(token.balanceOf(merchant), type(uint256).max);
-    }
-
-    function test_withdraw_emitsWithdrawnPerToken() public {
-        token.mint(address(vault), 100);
-        vm.expectEmit(true, true, false, true, address(vault));
-        emit Withdrawn(merchant, address(token), 90, 10);
-        _withdraw(vault, _arr(address(token)), _arr(uint256(90)), _arr(uint256(10)));
-    }
-
-    function test_withdraw_emitsWithdrawnForZeroAmountsToo() public {
-        // The event records the *scheduled* legs, so a fully-skipped token still logs.
-        vm.expectEmit(true, true, false, true, address(vault));
-        emit Withdrawn(merchant, address(token), 0, 0);
-        _withdraw(vault, _arr(address(token)), _arr(uint256(0)), _arr(uint256(0)));
-    }
-
-    function test_withdraw_eventIdentityIsMerchantNotPayout() public {
-        // The first indexed field is named `merchant`, so it must carry the merchant's identity
-        // even when the funds land somewhere else. The destination stays recoverable as
-        // `vault.payout()` at this block.
-        token.mint(address(customVault), 50);
-        vm.expectEmit(true, true, false, true, address(customVault));
-        emit Withdrawn(customMerchant, address(token), 40, 10);
-        _withdraw(customVault, _arr(address(token)), _arr(uint256(40)), _arr(uint256(10)));
-        assertEq(token.balanceOf(payoutAddr), 40, "funds really went to the payout address");
-    }
-
-    function test_withdraw_eventStillNamesMerchantAfterPayoutChange() public {
-        address np = makeAddr("np");
-        _change(vault, merchantPk, np);
-        token.mint(address(vault), 20);
-
-        vm.expectEmit(true, true, false, true, address(vault));
-        emit Withdrawn(merchant, address(token), 20, 0);
-        _withdraw(vault, _arr(address(token)), _arr(uint256(20)), _arr(uint256(0)));
-        assertEq(token.balanceOf(np), 20);
-    }
-
-    // ---- token quirks
-
-    function test_withdraw_noReturnTokenWorks() public {
-        NoReturnToken usdt = new NoReturnToken();
-        usdt.mint(address(vault), 100);
-        _withdraw(vault, _arr(address(usdt)), _arr(uint256(70)), _arr(uint256(30)));
-        assertEq(usdt.balanceOf(merchant), 70);
-        assertEq(usdt.balanceOf(address(factory)), 30);
-    }
-
-    function test_withdraw_falseReturningTokenReverts() public {
-        address bad = address(new FalseReturnToken());
-        vm.prank(operator);
-        vm.expectRevert(SafeTransferLib.TransferFailed.selector);
-        vault.withdraw(_arr(bad), _arr(uint256(1)), _arr(uint256(0)));
-    }
-
-    function test_withdraw_revertingTokenReverts() public {
-        address bad = address(new RevertingToken());
-        vm.prank(operator);
-        vm.expectRevert(SafeTransferLib.TransferFailed.selector);
-        vault.withdraw(_arr(bad), _arr(uint256(1)), _arr(uint256(0)));
-    }
-
-    function test_withdraw_insufficientBalanceReverts() public {
-        token.mint(address(vault), 99);
-        vm.prank(operator);
-        vm.expectRevert(SafeTransferLib.TransferFailed.selector);
-        vault.withdraw(_arr(address(token)), _arr(uint256(100)), _arr(uint256(0)));
-    }
-
-    function test_withdraw_feeLegFailureRollsBackMerchantLeg() public {
-        token.mint(address(vault), 100);
-        // each leg alone fits, together they exceed the balance
-        vm.prank(operator);
-        vm.expectRevert(SafeTransferLib.TransferFailed.selector);
-        vault.withdraw(_arr(address(token)), _arr(uint256(60)), _arr(uint256(60)));
-        assertEq(token.balanceOf(merchant), 0, "merchant leg rolled back");
-        assertEq(token.balanceOf(address(vault)), 100);
-    }
-
-    function test_withdraw_secondTokenFailureRollsBackFirst() public {
-        token.mint(address(vault), 100);
-        address[] memory t = new address[](2);
-        t[0] = address(token);
-        t[1] = address(new RevertingToken());
-        uint256[] memory m = new uint256[](2);
-        m[0] = 50;
-        m[1] = 1;
-        uint256[] memory f = new uint256[](2);
-
-        vm.prank(operator);
-        vm.expectRevert(SafeTransferLib.TransferFailed.selector);
-        vault.withdraw(t, m, f);
-        assertEq(token.balanceOf(merchant), 0);
-        assertEq(token.balanceOf(address(vault)), 100);
-    }
-
-    function test_withdraw_tokenAddressWithoutCodeReverts() public {
-        // Current Solady safeTransfer checks extcodesize (older releases silently succeeded).
-        address notAToken = makeAddr("notAToken");
-        vm.prank(operator);
-        vm.expectRevert(SafeTransferLib.TransferFailed.selector);
-        vault.withdraw(_arr(notAToken), _arr(uint256(1)), _arr(uint256(0)));
-    }
-
-    function test_withdraw_reentrancyThroughTokenIsBlocked() public {
-        ReentrantToken rt = new ReentrantToken();
-        rt.mint(address(vault), 100);
-        rt.arm(address(vault));
-        vm.prank(operator);
-        vm.expectRevert(SafeTransferLib.TransferFailed.selector);
-        vault.withdraw(_arr(address(rt)), _arr(uint256(10)), _arr(uint256(0)));
-        assertEq(rt.balanceOf(address(vault)), 100);
-    }
-
-    function test_withdraw_vaultsDoNotShareFunds() public {
-        token.mint(address(vault), 100);
-        token.mint(address(customVault), 100);
-        _withdraw(vault, _arr(address(token)), _arr(uint256(100)), _arr(uint256(0)));
-        assertEq(token.balanceOf(address(customVault)), 100);
-        assertEq(token.balanceOf(payoutAddr), 0);
-    }
-
-    // ============================================================ tokenBalance
-
-    function test_tokenBalance_reflectsHoldings() public {
-        assertEq(vault.tokenBalance(address(token)), 0);
-        token.mint(address(vault), 123);
-        assertEq(vault.tokenBalance(address(token)), 123);
-    }
-
-    function test_tokenBalance_zeroForNonContractOrNonToken() public {
-        assertEq(vault.tokenBalance(makeAddr("eoa")), 0);
-        assertEq(vault.tokenBalance(address(new RevertingToken())), 0);
-    }
-
-    function test_tokenBalance_noReturnTokenBalance() public {
-        NoReturnToken usdt = new NoReturnToken();
-        usdt.mint(address(vault), 7);
-        assertEq(vault.tokenBalance(address(usdt)), 7);
     }
 
     // ============================================================ funds are safe from payout changes
@@ -915,7 +626,7 @@ contract X402VaultTest is X402Base {
         X402Vault v = X402Vault(_deploy(m, m));
 
         bytes memory sig = _sig(otherPk, address(v), newPayout, 0, _deadline());
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         v.changePayout(newPayout, _deadline(), sig);
         assertEq(v.nonce(), 0);
         assertEq(v.payout(), m);
@@ -925,7 +636,7 @@ contract X402VaultTest is X402Base {
         vm.assume(signed != submitted && submitted != address(0));
         uint256 dl = _deadline();
         bytes memory sig = _sig(merchantPk, address(vault), signed, 0, dl);
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(submitted, dl, sig);
     }
 
@@ -933,7 +644,7 @@ contract X402VaultTest is X402Base {
         vm.assume(newPayout != address(0) && signedNonce != 0);
         uint256 dl = _deadline();
         bytes memory sig = _sig(merchantPk, address(vault), newPayout, signedNonce, dl);
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(newPayout, dl, sig);
     }
 
@@ -948,13 +659,13 @@ contract X402VaultTest is X402Base {
         assertEq(vault.payout(), last);
         // none of the earlier signatures can be replayed
         uint256 dl = _deadline();
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(last, dl, _sig(merchantPk, address(vault), last, n - 1, dl));
     }
 
     function testFuzz_changePayout_garbageSignatureNeverAuthorizes(bytes calldata garbage, address newPayout) public {
         vm.assume(newPayout != address(0));
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(newPayout, _deadline(), garbage);
         assertEq(vault.nonce(), 0);
     }
@@ -962,7 +673,7 @@ contract X402VaultTest is X402Base {
     function testFuzz_changePayout_badLengthAlwaysReverts(uint256 len, address newPayout) public {
         len = bound(len, 0, 300);
         vm.assume(len != 64 && len != 65 && newPayout != address(0));
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(newPayout, _deadline(), new bytes(len));
     }
 
@@ -976,7 +687,7 @@ contract X402VaultTest is X402Base {
         vm.warp(at);
 
         if (at > dl) {
-            vm.expectRevert(X402Vault.InvalidSignature.selector);
+            vm.expectRevert(IX402Vault.InvalidSignature.selector);
             vault.changePayout(np, dl, sig);
             assertEq(vault.nonce(), 0);
         } else {
@@ -991,7 +702,7 @@ contract X402VaultTest is X402Base {
         vm.chainId(chainA);
         bytes memory sig = _sig(merchantPk, address(vault), newPayout, 0, dl);
         vm.chainId(chainB);
-        vm.expectRevert(X402Vault.InvalidSignature.selector);
+        vm.expectRevert(IX402Vault.InvalidSignature.selector);
         vault.changePayout(newPayout, dl, sig);
         vm.chainId(chainA);
         vault.changePayout(newPayout, dl, sig);
@@ -1030,87 +741,570 @@ contract X402VaultTest is X402Base {
     function testFuzz_initPayout_onlyFactory(address caller, address p) public {
         vm.assume(caller != address(factory));
         vm.prank(caller);
-        vm.expectRevert(X402Vault.Unauthorized.selector);
+        vm.expectRevert(IX402Vault.Unauthorized.selector);
         vault.initPayout(p);
     }
 
-    function testFuzz_withdraw_onlyOperator(address caller) public {
-        vm.assume(caller != operator);
+    // ============================================================ settle: EIP-3009
+
+    /// @dev The point of the rework: collection and both split legs are one transaction, and the
+    /// two legs sum to exactly what the payer authorised. `_pay` deliberately relays as `stranger`.
+    function test_settle_splitsAndEmits() public {
+        _configure(token, BPS);
+
+        uint256 fee = _fee(token);
+        uint256 value = 1e18;
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, value);
+
+        bytes32 authNonce = keccak256("split");
+
+        vm.expectEmit(true, true, true, true, address(vault));
+        emit Settle(merchant, address(token), payer, value - fee, fee);
+
+        _pay(payerPk, vault, token, value, authNonce);
+
+        assertEq(token.balanceOf(merchant), value - fee, "merchant share");
+        assertEq(token.balanceOf(address(factory)), fee, "fee share");
+        assertEq(token.balanceOf(merchant) + token.balanceOf(address(factory)), value, "conservation");
+        assertEq(token.balanceOf(address(vault)), 0, "the vault keeps nothing");
+        assertEq(token.balanceOf(payer), 0, "the payer is charged exactly the authorised amount");
+        assertTrue(token.authorizationState(payer, authNonce), "authorization consumed");
+    }
+
+    /// @dev `settle` is permissionless because the payload authenticates itself: the caller is only
+    /// a relay. It is what lets a merchant settle their own payments if the operator ever stops.
+    function test_settle_isPermissionless(address caller) public {
+        vm.assume(caller != address(0));
+        _configure(token, BPS);
+
+        uint256 fee = _fee(token);
+        uint256 value = 1e18;
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, value);
+
         vm.prank(caller);
-        vm.expectRevert(X402Vault.Unauthorized.selector);
-        vault.withdraw(new address[](0), new uint256[](0), new uint256[](0));
-    }
+        vault.settle(address(token), _auth3009(payerPk, address(token), address(vault), value, keccak256("anyone")));
 
-    function testFuzz_withdraw_conservesTokens(uint128 balance, uint8 n, uint256 seed) public {
-        uint256 len = bound(n, 0, 8);
-        token.mint(address(vault), balance);
-
-        address[] memory t = new address[](len);
-        uint256[] memory m = new uint256[](len);
-        uint256[] memory f = new uint256[](len);
-        uint256 remaining = balance;
-        uint256 sumM;
-        uint256 sumF;
-        for (uint256 i; i < len; ++i) {
-            t[i] = address(token);
-            m[i] = uint256(keccak256(abi.encode(seed, i, uint8(0)))) % (remaining + 1);
-            remaining -= m[i];
-            f[i] = uint256(keccak256(abi.encode(seed, i, uint8(1)))) % (remaining + 1);
-            remaining -= f[i];
-            sumM += m[i];
-            sumF += f[i];
-        }
-
-        _withdraw(vault, t, m, f);
-
-        assertEq(token.balanceOf(merchant), sumM);
-        assertEq(token.balanceOf(address(factory)), sumF);
-        assertEq(token.balanceOf(address(vault)), remaining);
-        assertEq(
-            token.balanceOf(merchant) + token.balanceOf(address(factory)) + token.balanceOf(address(vault)), balance
-        );
-    }
-
-    function testFuzz_withdraw_payoutDestination(address p, uint128 amount, uint128 fee) public {
-        vm.assume(p != address(0) && p != address(customVault) && p != address(factory));
-        uint256 total = uint256(amount) + uint256(fee);
-        address cm = makeAddr("fuzzMerchant");
-        X402Vault v = X402Vault(_deploy(cm, p));
-        token.mint(address(v), total);
-        uint256 before = token.balanceOf(p);
-
-        _withdraw(v, _arr(address(token)), _arr(uint256(amount)), _arr(uint256(fee)));
-
-        if (p == address(v)) {
-            assertEq(token.balanceOf(p), total - fee); // payout is the vault itself: only the fee left
-        } else {
-            assertEq(token.balanceOf(p), before + amount);
-        }
+        assertEq(token.balanceOf(merchant), value - fee);
         assertEq(token.balanceOf(address(factory)), fee);
     }
 
-    function testFuzz_withdraw_overdrawReverts(uint128 balance, uint128 extra) public {
-        extra = uint128(bound(extra, 1, type(uint128).max));
-        token.mint(address(vault), balance);
-        vm.prank(operator);
+    function test_settle_paysTheVaultsOwnPayoutAddress() public {
+        _configure(token, BPS);
+
+        uint256 fee = _fee(token);
+        uint256 value = 1e18;
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, value);
+
+        _pay(payerPk, customVault, token, value, keccak256("custom"));
+
+        assertEq(token.balanceOf(payoutAddr), value - fee, "the override payout is paid");
+        assertEq(token.balanceOf(customMerchant), 0, "the merchant is not the payout of this vault");
+        assertEq(token.balanceOf(address(factory)), fee);
+    }
+
+    /// @dev A payout change is authorised by the merchant and must steer *subsequent* settlements.
+    function test_settle_followsAPayoutChange() public {
+        _configure(token, BPS);
+
+        uint256 fee = _fee(token);
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, 2e18);
+
+        address next = makeAddr("next-payout");
+        _change(vault, merchantPk, next);
+
+        _pay(payerPk, vault, token, 1e18, keccak256("after-change"));
+
+        assertEq(token.balanceOf(next), 1e18 - fee);
+        assertEq(token.balanceOf(merchant), 0);
+    }
+
+    /// @dev The factory's allowlist is the fee switch: an unconfigured token cannot be settled.
+    function test_settle_unconfiguredTokenReverts() public {
+        uint256 value = 1e18;
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, value);
+
+        assertEq(factory.tokenFeeBPS(address(token)), 0, "not configured");
+
+        vm.prank(stranger);
+        vm.expectRevert(IX402Vault.TokenNotSupported.selector);
+        vault.settle(address(token), _auth3009(payerPk, address(token), address(vault), value, keccak256("n")));
+
+        assertEq(token.balanceOf(payer), value);
+    }
+
+    /// @dev `tokenFeeBPS > 0` does not imply a non-zero fee: `tokenFee` is
+    /// `bps * 10**decimals / 10000`, so a low-decimal token rounds to nothing. Settling for free is
+    /// a misconfiguration and must fail loudly rather than quietly waive the fee.
+    function test_settle_feeThatRoundsToZeroReverts() public {
+        LowDecimalToken low = new LowDecimalToken();
+        _configure(low, 1);
+
+        assertEq(factory.tokenFeeBPS(address(low)), 1, "configured");
+        assertEq(factory.tokenFee(address(low)), 0, "but the computed fee rounds to zero");
+
+        uint256 value = 1e6;
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        low.mint(payer, value);
+
+        vm.prank(stranger);
+        vm.expectRevert(IX402Vault.TokenNotSupported.selector);
+        vault.settle(address(low), _auth3009(payerPk, address(low), address(vault), value, keccak256("n")));
+
+        assertEq(low.balanceOf(payer), value);
+    }
+
+    /// @dev The fee check runs *before* the pull, so a below-fee payment fails with the
+    /// authorization untouched: the payer keeps their funds and can still spend that nonce.
+    function test_settle_atOrBelowFeeRevertsAndLeavesAuthorizationUsable() public {
+        _configure(token, BPS);
+
+        uint256 fee = _fee(token);
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, 2e18);
+
+        bytes32 authNonce = keccak256("small");
+
+        _expectAmountBelowFee(payerPk, fee, authNonce);
+        _expectAmountBelowFee(payerPk, fee - 1, authNonce);
+
+        assertEq(token.balanceOf(payer), 2e18, "nothing moved");
+        assertFalse(token.authorizationState(payer, authNonce), "authorization untouched");
+
+        // Still spendable, for a payment that does cover the fee.
+        _pay(payerPk, vault, token, 1e18, authNonce);
+
+        assertTrue(token.authorizationState(payer, authNonce));
+        assertEq(token.balanceOf(payer), 1e18);
+    }
+
+    function _expectAmountBelowFee(uint256 payerPk, uint256 value, bytes32 authNonce) internal {
+        vm.prank(stranger);
+        vm.expectRevert(IX402Vault.AmountBelowFee.selector);
+        vault.settle(address(token), _auth3009(payerPk, address(token), address(vault), value, authNonce));
+    }
+
+    function testFuzz_settle_belowFeeAlwaysReverts(uint256 value) public {
+        _configure(token, BPS);
+
+        uint256 fee = _fee(token);
+        value = bound(value, 0, fee);
+
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, fee);
+
+        bytes32 authNonce = keccak256("fuzz-small");
+
+        vm.prank(stranger);
+        vm.expectRevert(IX402Vault.AmountBelowFee.selector);
+        vault.settle(address(token), _auth3009(payerPk, address(token), address(vault), value, authNonce));
+
+        assertEq(token.balanceOf(payer), fee);
+        assertFalse(token.authorizationState(payer, authNonce));
+    }
+
+    function testFuzz_settle_conservesValue(uint256 value) public {
+        _configure(token, BPS);
+
+        uint256 fee = _fee(token);
+        value = bound(value, fee + 1, 1e30);
+
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, value);
+
+        _pay(payerPk, vault, token, value, keccak256("fuzz-conserve"));
+
+        assertEq(token.balanceOf(merchant), value - fee);
+        assertEq(token.balanceOf(address(factory)), fee);
+        assertEq(token.balanceOf(merchant) + token.balanceOf(address(factory)), value);
+        assertEq(token.balanceOf(address(vault)), 0);
+        assertEq(token.balanceOf(payer), 0);
+    }
+
+    function test_settle_replayedAuthorizationReverts() public {
+        _configure(token, BPS);
+
+        uint256 fee = _fee(token);
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, 2e18);
+
+        bytes32 authNonce = keccak256("once");
+        _pay(payerPk, vault, token, 1e18, authNonce);
+
+        vm.prank(stranger);
+        vm.expectRevert(bytes("authorization already used"));
+        vault.settle(address(token), _auth3009(payerPk, address(token), address(vault), 1e18, authNonce));
+
+        assertEq(token.balanceOf(merchant), 1e18 - fee, "paid exactly once");
+        assertEq(token.balanceOf(address(factory)), fee, "fee taken exactly once");
+    }
+
+    function test_settle_expiredAuthorizationReverts() public {
+        _configure(token, BPS);
+
+        uint256 value = 1e18;
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, value);
+
+        bytes32 authNonce = keccak256("expired");
+        uint256 validBefore = block.timestamp; // the token rejects at `>= validBefore`
+
+        (uint8 v, bytes32 r, bytes32 s) =
+            vm.sign(payerPk, _tokenDigest(address(token), payer, address(vault), value, 0, validBefore, authNonce));
+
+        vm.prank(stranger);
+        vm.expectRevert(bytes("authorization expired"));
+        vault.settle(
+            address(token),
+            IX402Vault.Eip3009Authorization({
+                from: payer, value: value, validAfter: 0, validBefore: validBefore, nonce: authNonce, v: v, r: r, s: s
+            })
+        );
+
+        assertEq(token.balanceOf(payer), value);
+        assertFalse(token.authorizationState(payer, authNonce));
+    }
+
+    /// @dev The vault passes `to = address(this)` to the token, so a payment the payer signed for
+    /// any other recipient cannot be redirected here.
+    function test_settle_signatureForAnotherRecipientReverts() public {
+        _configure(token, BPS);
+
+        uint256 value = 1e18;
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, value);
+
+        IX402Vault.Eip3009Authorization memory auth =
+            _auth3009(payerPk, address(token), payoutAddr, value, keccak256("wrong-to"));
+
+        vm.prank(stranger);
+        vm.expectRevert(bytes("invalid authorization signature"));
+        vault.settle(address(token), auth);
+
+        assertEq(token.balanceOf(payer), value);
+    }
+
+    // ------------------------------------------------ settle: token behaviour
+
+    /// @dev A payout leg that fails must take the collection down with it. Nothing is left
+    /// half-applied: no tokens moved, and the authorization is still spendable.
+    function test_settle_falseReturningPayoutLegRevertsTheWholeSettlement() public {
+        FalsePayoutToken t = new FalsePayoutToken();
+        _configure(t, BPS);
+
+        uint256 value = 1e18;
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        t.mint(payer, value);
+
+        bytes32 authNonce = keccak256("false-leg");
+
+        vm.prank(stranger);
         vm.expectRevert(SafeTransferLib.TransferFailed.selector);
-        vault.withdraw(_arr(address(token)), _arr(uint256(balance) + extra), _arr(uint256(0)));
-        assertEq(token.balanceOf(address(vault)), balance);
+        vault.settle(address(t), _auth3009(payerPk, address(t), address(vault), value, authNonce));
+
+        assertEq(t.balanceOf(payer), value, "the collection was rolled back");
+        assertEq(t.balanceOf(address(vault)), 0);
+        assertFalse(t.authorizationState(payer, authNonce), "the authorization was not consumed");
     }
 
-    function testFuzz_withdraw_lengthMismatchReverts(uint8 a, uint8 b, uint8 c) public {
-        uint256 la = bound(a, 0, 6);
-        uint256 lb = bound(b, 0, 6);
-        uint256 lc = bound(c, 0, 6);
-        vm.assume(!(la == lb && lb == lc));
-        vm.prank(operator);
-        vm.expectRevert(X402Vault.LengthMismatch.selector);
-        vault.withdraw(new address[](la), new uint256[](lb), new uint256[](lc));
+    function test_settle_revertingPayoutLegRevertsTheWholeSettlement() public {
+        RevertingPayoutToken t = new RevertingPayoutToken();
+        _configure(t, BPS);
+
+        uint256 value = 1e18;
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        t.mint(payer, value);
+
+        bytes32 authNonce = keccak256("reverting-leg");
+
+        vm.prank(stranger);
+        vm.expectRevert(SafeTransferLib.TransferFailed.selector);
+        vault.settle(address(t), _auth3009(payerPk, address(t), address(vault), value, authNonce));
+
+        assertEq(t.balanceOf(payer), value);
+        assertEq(t.balanceOf(address(vault)), 0);
+        assertFalse(t.authorizationState(payer, authNonce));
     }
 
-    function testFuzz_tokenBalance(uint128 amount) public {
-        token.mint(address(vault), amount);
-        assertEq(vault.tokenBalance(address(token)), amount);
+    /// @dev The split assumes the vault receives exactly `value`. A fee-on-transfer token breaks
+    /// that assumption, so the settlement must revert rather than underpay the merchant.
+    function test_settle_feeOnTransferCollectionRevertsTheWholeSettlement() public {
+        FeeOnTransferToken t = new FeeOnTransferToken();
+        _configure(t, BPS);
+
+        uint256 value = 1e18;
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        t.mint(payer, value);
+
+        bytes32 authNonce = keccak256("fee-on-transfer");
+
+        vm.prank(stranger);
+        vm.expectRevert(SafeTransferLib.TransferFailed.selector);
+        vault.settle(address(t), _auth3009(payerPk, address(t), address(vault), value, authNonce));
+
+        assertEq(t.balanceOf(payer), value);
+        assertEq(t.balanceOf(address(vault)), 0);
+        assertFalse(t.authorizationState(payer, authNonce));
+    }
+
+    /// @dev Documentation of a known, accepted limitation rather than a guarantee: a stray balance
+    /// already sitting in the vault silently covers a fee-on-transfer shortfall instead of the
+    /// call reverting. Reaching this needs a deliberate third-party `transfer` to the vault
+    /// address — no protocol function can put a balance there. Keep fee-on-transfer tokens off
+    /// `tokenFeeBPS`; the allowlist is the control.
+    function test_settle_strayBalanceSilentlyCoversAFeeOnTransferShortfall() public {
+        FeeOnTransferToken t = new FeeOnTransferToken();
+        _configure(t, BPS);
+
+        uint256 fee = _fee(t);
+        uint256 value = 1e18;
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        t.mint(payer, value);
+        t.mint(address(vault), 1e18); // stray
+
+        _pay(payerPk, vault, t, value, keccak256("stray"));
+
+        // Both legs are skimmed on the way out too, so the amounts are 1% shy of the split.
+        uint256 merchantLeg = value - fee;
+        assertEq(t.balanceOf(merchant), merchantLeg - merchantLeg / 100);
+        assertEq(t.balanceOf(address(factory)), fee - fee / 100);
+
+        // The stray balance paid the 1% the collection lost.
+        assertEq(t.balanceOf(address(vault)), 1e18 - value / 100);
+    }
+
+    /// @dev Re-entering settlement from the token during a payout leg cannot double-spend. The
+    /// inner call is an ordinary settlement of a *different*, separately signed authorization, and
+    /// the vault holds nothing between transactions, so there is no state to corrupt.
+    function test_settle_reentrancyCannotDoubleSpend() public {
+        _installPermit2();
+
+        ReentrantToken rt = new ReentrantToken();
+        _configure(rt, BPS);
+
+        uint256 fee = _fee(rt);
+        uint256 value = 1e18;
+
+        uint256 outerPk = 0xCAFE;
+        address outerPayer = vm.addr(outerPk);
+        rt.mint(outerPayer, value);
+
+        uint256 innerPk = 0xBEEF;
+        address innerPayer = vm.addr(innerPk);
+        rt.mint(innerPayer, value);
+        _approvePermit2(rt, innerPayer);
+
+        (IX402Vault.Permit2Authorization memory innerAuth, bytes memory innerSig) =
+            _permit2Auth(innerPk, SafeTransferLib.PERMIT2, address(vault), address(rt), value, 11);
+
+        rt.arm(address(vault), abi.encodeCall(X402Vault.settleWithPermit2, (address(rt), innerAuth, innerSig)));
+
+        _pay(outerPk, vault, rt, value, keccak256("outer"));
+
+        assertEq(rt.balanceOf(merchant), 2 * (value - fee), "each payment landed exactly once");
+        assertEq(rt.balanceOf(address(factory)), 2 * fee);
+        assertEq(rt.balanceOf(address(vault)), 0);
+        assertEq(rt.balanceOf(outerPayer), 0);
+        assertEq(rt.balanceOf(innerPayer), 0);
+    }
+
+    // ============================================================ settle: Permit2
+
+    function test_settleWithPermit2_splitsAndEmits() public {
+        MockPermit2 permit2 = _installPermit2();
+        _configure(token, BPS);
+
+        uint256 fee = _fee(token);
+        uint256 value = 1e18;
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, value);
+        _approvePermit2(token, payer);
+
+        uint256 permitNonce = 7;
+
+        vm.expectEmit(true, true, true, true, address(vault));
+        emit Settle(merchant, address(token), payer, value - fee, fee);
+
+        _payWithPermit2(payerPk, vault, token, value, permitNonce);
+
+        assertEq(token.balanceOf(merchant), value - fee);
+        assertEq(token.balanceOf(address(factory)), fee);
+        assertEq(token.balanceOf(merchant) + token.balanceOf(address(factory)), value);
+        assertEq(token.balanceOf(address(vault)), 0);
+        assertEq(token.balanceOf(payer), 0);
+        assertTrue(permit2.nonceUsed(payer, permitNonce), "permit nonce consumed");
+    }
+
+    function test_settleWithPermit2_unconfiguredTokenReverts() public {
+        _installPermit2();
+
+        uint256 value = 1e18;
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, value);
+        _approvePermit2(token, payer);
+
+        (IX402Vault.Permit2Authorization memory auth, bytes memory sig) =
+            _permit2Auth(payerPk, SafeTransferLib.PERMIT2, address(vault), address(token), value, 1);
+
+        vm.prank(stranger);
+        vm.expectRevert(IX402Vault.TokenNotSupported.selector);
+        vault.settleWithPermit2(address(token), auth, sig);
+
+        assertEq(token.balanceOf(payer), value);
+    }
+
+    function test_settleWithPermit2_belowFeeRevertsAndLeavesNonceUnused() public {
+        MockPermit2 permit2 = _installPermit2();
+        _configure(token, BPS);
+
+        uint256 fee = _fee(token);
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, fee);
+        _approvePermit2(token, payer);
+
+        uint256 permitNonce = 3;
+        (IX402Vault.Permit2Authorization memory auth, bytes memory sig) =
+            _permit2Auth(payerPk, SafeTransferLib.PERMIT2, address(vault), address(token), fee, permitNonce);
+
+        vm.prank(stranger);
+        vm.expectRevert(IX402Vault.AmountBelowFee.selector);
+        vault.settleWithPermit2(address(token), auth, sig);
+
+        assertEq(token.balanceOf(payer), fee, "nothing moved");
+        assertFalse(permit2.nonceUsed(payer, permitNonce), "the permit nonce is untouched");
+    }
+
+    function test_settleWithPermit2_replayedNonceReverts() public {
+        _installPermit2();
+        _configure(token, BPS);
+
+        uint256 fee = _fee(token);
+        uint256 value = 1e18;
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, 2 * value);
+        _approvePermit2(token, payer);
+
+        uint256 permitNonce = 5;
+        _payWithPermit2(payerPk, vault, token, value, permitNonce);
+
+        (IX402Vault.Permit2Authorization memory auth, bytes memory sig) =
+            _permit2Auth(payerPk, SafeTransferLib.PERMIT2, address(vault), address(token), value, permitNonce);
+
+        vm.prank(stranger);
+        vm.expectRevert(bytes("nonce already used"));
+        vault.settleWithPermit2(address(token), auth, sig);
+
+        assertEq(token.balanceOf(merchant), value - fee, "settled exactly once");
+        assertEq(token.balanceOf(address(factory)), fee);
+    }
+
+    /// @dev The binding that makes a permissionless Permit2 settlement safe: Permit2 puts
+    /// `msg.sender` — this vault — into the digest it verifies, so a signature the payer gave to
+    /// someone else cannot be replayed here to move their funds.
+    function test_settleWithPermit2_signatureForAnotherSpenderReverts() public {
+        _installPermit2();
+        _configure(token, BPS);
+
+        uint256 value = 1e18;
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, value);
+        _approvePermit2(token, payer);
+
+        (IX402Vault.Permit2Authorization memory auth, bytes memory sig) =
+            _permit2Auth(payerPk, SafeTransferLib.PERMIT2, makeAddr("some-other-spender"), address(token), value, 1);
+
+        vm.prank(stranger);
+        vm.expectRevert(bytes("invalid permit signature"));
+        vault.settleWithPermit2(address(token), auth, sig);
+
+        assertEq(token.balanceOf(payer), value);
+    }
+
+    function test_settleWithPermit2_signatureForSmallerAmountReverts() public {
+        _installPermit2();
+        _configure(token, BPS);
+
+        uint256 value = 1e18;
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, value);
+        _approvePermit2(token, payer);
+
+        uint256 permitNonce = 2;
+        uint256 deadline = block.timestamp + 1 days;
+
+        // Signed for half of what the payload claims. The vault builds `permitted.amount` from the
+        // payload's `value`, so the digest no longer matches the signature.
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(
+            payerPk,
+            _permit2Digest(SafeTransferLib.PERMIT2, address(vault), address(token), value / 2, permitNonce, deadline)
+        );
+
+        vm.prank(stranger);
+        vm.expectRevert(bytes("invalid permit signature"));
+        vault.settleWithPermit2(
+            address(token),
+            IX402Vault.Permit2Authorization({from: payer, value: value, nonce: permitNonce, deadline: deadline}),
+            abi.encodePacked(r, s, v)
+        );
+
+        assertEq(token.balanceOf(payer), value);
+    }
+
+    function test_settleWithPermit2_expiredDeadlineReverts() public {
+        _installPermit2();
+        _configure(token, BPS);
+
+        uint256 value = 1e18;
+        uint256 payerPk = 0xCAFE;
+        address payer = vm.addr(payerPk);
+        token.mint(payer, value);
+        _approvePermit2(token, payer);
+
+        uint256 permitNonce = 4;
+        uint256 deadline = block.timestamp;
+
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(
+            payerPk,
+            _permit2Digest(SafeTransferLib.PERMIT2, address(vault), address(token), value, permitNonce, deadline)
+        );
+
+        vm.warp(deadline + 1);
+
+        vm.prank(stranger);
+        vm.expectRevert(bytes("signature expired"));
+        vault.settleWithPermit2(
+            address(token),
+            IX402Vault.Permit2Authorization({from: payer, value: value, nonce: permitNonce, deadline: deadline}),
+            abi.encodePacked(r, s, v)
+        );
+
+        assertEq(token.balanceOf(payer), value);
     }
 }
 
