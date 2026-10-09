@@ -23,18 +23,67 @@ contract DeployX402VaultFactory is Script {
         // Re-running on a chain where it's already deployed would revert, so skip cleanly.
         if (predicted.code.length != 0) {
             console2.log("Already deployed, skipping.");
-            return X402VaultFactory(predicted);
+            factory = X402VaultFactory(predicted);
+        } else {
+            vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+            factory = new X402VaultFactory{salt: SALT}(owner, operator);
+            vm.stopBroadcast();
+
+            require(address(factory) == predicted, "address mismatch");
         }
-
-        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        factory = new X402VaultFactory{salt: SALT}(owner, operator);
-        vm.stopBroadcast();
-
-        require(address(factory) == predicted, "address mismatch");
 
         console2.log("X402VaultFactory: ", address(factory));
         console2.log("X402Vault (impl): ", factory.implementation());
         console2.log("Owner:            ", factory.owner());
-        console2.log("Operator:         ", factory.operator());
+        // Roles, not a single operator: `setOperator`/`operator()` no longer exist.
+        console2.log("Operator roles:   ", factory.rolesOf(operator));
+        console2.log("Operator can create:", factory.hasAnyRole(operator, factory.OPERATOR_ROLE()));
+
+        _seedFees(factory);
+    }
+
+    /// @dev Seeds `tokenFeeBPS` from `FEE_TOKENS` / `FEE_BPS` — comma-separated env vars, e.g.
+    /// `FEE_TOKENS=0xA,0xB FEE_BPS=10,250`.
+    ///
+    /// This is not cosmetic. A freshly deployed factory has `tokenFeeBPS == 0` for every token, and
+    /// `settle`/`settleWithPermit2` deliberately refuse an unconfigured token — so a factory that
+    /// ships without this step reverts `TokenNotSupported` on every payment.
+    function _seedFees(X402VaultFactory factory) internal {
+        address[] memory tokens = vm.envOr("FEE_TOKENS", ",", new address[](0));
+        string[] memory bpsStrings = vm.envOr("FEE_BPS", ",", new string[](0));
+
+        if (tokens.length == 0) {
+            console2.log(
+                "WARNING: FEE_TOKENS is unset, so no token is configured and every settle will revert TokenNotSupported."
+            );
+            return;
+        }
+
+        require(tokens.length == bpsStrings.length, "FEE_TOKENS/FEE_BPS length mismatch");
+
+        uint16[] memory bps = new uint16[](tokens.length);
+        for (uint256 i; i < bpsStrings.length; ++i) {
+            uint256 value = vm.parseUint(bpsStrings[i]);
+            require(value <= type(uint16).max, "FEE_BPS out of range");
+            // Safe: the line above rejects anything that would truncate.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            bps[i] = uint16(value);
+        }
+
+        if (factory.owner() != msg.sender) {
+            console2.log("WARNING: broadcaster is not the factory owner; skipping setTokenFees. Owner is:");
+            console2.logAddress(factory.owner());
+            return;
+        }
+
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+        factory.setTokenFees(tokens, bps);
+        vm.stopBroadcast();
+
+        for (uint256 i; i < tokens.length; ++i) {
+            console2.log("Fee seeded:", tokens[i]);
+            console2.log("  bps:", bps[i]);
+            console2.log("  tokenFee:", factory.tokenFee(tokens[i]));
+        }
     }
 }

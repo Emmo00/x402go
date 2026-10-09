@@ -16,7 +16,6 @@ contract X402VaultFactory is IX402VaultFactory, OwnableRoles {
 
     uint256 public constant FEE_DENOMINATOR = 10_000; // Basis points denominator
 
-
     uint256 public constant OPERATOR_ROLE = _ROLE_0;
 
     mapping(address token => uint16 fee) public tokenFeeBPS; // $1 = 10,000, $0.001 = 10

@@ -9,5 +9,12 @@ remappings = ["solady/=lib/solady/src/", "forge-std/=lib/forge-std/src/"]
 [fuzz]
 runs = 10000
 
+# Invariants are checked after every call in the sequence, and each check makes real external calls
+# (including `merchant()`, which reads the clone's own bytecode). The sequence budget is therefore
+# kept modest so the suite stays usable rather than being quietly disabled.
+[invariant]
+runs = 16
+depth = 48
+
 [lint]
 lint_on_build = true
