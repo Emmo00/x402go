@@ -3,7 +3,10 @@ pragma solidity ^0.8.24;
 
 import {X402Vault} from "./X402Vault.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
+import {IPermit2} from "./interfaces/IPermit2.sol";
+import {IX402Vault} from "./interfaces/IX402Vault.sol";
 import {IX402VaultFactory} from "./interfaces/IX402VaultFactory.sol";
+import {IX402ExactPermit2Proxy} from "./interfaces/IX402ExactPermit2Proxy.sol";
 import {OwnableRoles} from "solady/auth/OwnableRoles.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
@@ -26,12 +29,34 @@ contract X402VaultFactory is IX402VaultFactory, OwnableRoles {
         implementation = address(new X402Vault(address(this)));
     }
 
+    function createVaultAndSettle(
+        address merchant,
+        address payout,
+        address token,
+        IX402Vault.Eip3009Authorization calldata auth
+    ) external returns (address vault) {
+        vault = createVault(merchant, payout);
+        IX402Vault(vault).settle(token, auth);
+    }
+
+    function createVaultAndSettleWithPermit2(
+        address merchant,
+        address payout,
+        IPermit2.PermitTransferFrom calldata permit,
+        address from,
+        IX402ExactPermit2Proxy.Witness calldata witness,
+        bytes calldata signature
+    ) external returns (address vault) {
+        vault = createVault(merchant, payout);
+        IX402Vault(vault).settleWithPermit2(permit, from, witness, signature);
+    }
+
     /// @dev Creates a new vault for the given merchant, with the given payout address.
     /// @param merchant The merchant address for which the vault is created.
     /// @param payout The payout address for the vault. If equal to the merchant, the merchant address will be used as the payout address.
     /// @return vault The address of the newly created vault.
     /// @notice The vault address is deterministic and can be predicted using the `vaultOf` function.
-    function createVault(address merchant, address payout) external returns (address vault) {
+    function createVault(address merchant, address payout) public returns (address vault) {
         if (merchant == address(0) || payout == address(0)) {
             revert InvalidAddress();
         }
@@ -50,7 +75,7 @@ contract X402VaultFactory is IX402VaultFactory, OwnableRoles {
 
         vault = LibClone.cloneDeterministic(implementation, args, salt);
 
-        if (payout != merchant) X402Vault(vault).initPayout(payout);
+        if (payout != merchant) IX402Vault(vault).initPayout(payout);
 
         emit VaultCreated(merchant, vault, payout);
     }
