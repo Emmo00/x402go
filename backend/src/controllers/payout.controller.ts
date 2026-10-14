@@ -56,13 +56,13 @@ class PayoutController {
     if (!isValidPayToAddress(payTo)) {
       return res.status(400).json({
         message:
-          'payTo must be a 0x-prefixed 20-byte address and must not be the zero address',
+          'payTo must be a valid Ethereum address',
       });
     }
 
     const payoutAddressSet: IPayoutOutcome = await this.payoutService.getPayTo(String(user._id));
 
-    if (payoutAddressSet.status == "ok" && !changePayoutSignature) {
+    if (payoutAddressSet.status == 'ok' && payoutAddressSet.payTo && !changePayoutSignature) {
       return res.status(400).json({
         message: 'You need to sign a Change Payout signature with your wallet to change the payout address on your account'
       })
