@@ -44,20 +44,10 @@ class AuthController {
 
         req.session.userId = userId; // Store the user's ID in the session
 
-        // Record the merchant's deterministic vault address on every supported
-        // chain, so the dashboard can show it without deriving it per request.
-        //
-        // The address is a pure function of the merchant and the factory, so
-        // this needs no chain access and deploys nothing — a vault is created
-        // when an operation needs one, not because someone signed in.
-        //
-        // It is deliberately not allowed to fail the sign-in. The merchant is
-        // already authenticated by this point, and a dashboard that has not yet
-        // recorded a vault address is a recoverable state — the next read
-        // derives it — whereas a 500 here would lock a valid user out.
+        // Record the merchant's deterministic vault address
         if (userId) {
           try {
-            await this.accountService.ensureVaults(userId, address);
+            await this.accountService.ensureVault(userId, address);
           } catch (error) {
             console.error('[auth] could not record vault addresses at sign-in', error);
           }

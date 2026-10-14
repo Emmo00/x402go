@@ -1,50 +1,11 @@
-import { createPublicClient, defineChain, http, type Chain, type PublicClient } from 'viem';
-import { CHAINS, type ChainKey } from '../config';
+import { type Chain, type PublicClient } from 'viem';
+import { createConnectedClient, createSigner } from '@facilitator/types/shared';
+import type { Network, ConnectedClient, Signer  } from '@facilitator/types/shared';
 
-/**
- * Read-only RPC access, one client per chain.
- *
- * The chain objects are built from `src/config` rather than imported from
- * `viem/chains`, so the config stays the single place a chain is described. If
- * `viem/chains` and this project ever disagreed about an endpoint, the
- * disagreement would be resolved silently in viem's favour; deriving the chain
- * here means there is only one answer.
- *
- * Everything here is read-only on purpose. x402Go's writes are vault creation
- * and withdrawal, which are the operator's job and belong to a later step —
- * this module has no account attached and cannot sign anything.
- */
+export const { OPERATOR_KEY, OPERATOR_ADDRESS } = process.env;
 
-/** A factory that hands back a client for a chain. Injectable so tests can
- * supply a stub instead of reaching the network. */
-export type ChainClientProvider = (chain: ChainKey) => PublicClient;
-
-/**
- * The two chains, in viem's shape.
- *
- * `nativeCurrency` is CELO on both: Celo Sepolia is a Celo testnet, so its gas
- * token is CELO too, not a faucet token.
- *
- * Exported because the signing side needs the same chain object and must not
- * build a second one: a wallet client pointed at a chain that disagreed with
- * the one the reads use would sign against the wrong id, which is the kind of
- * bug that only shows up as a rejected transaction on mainnet.
- */
-export function toViemChain(key: ChainKey): Chain {
-  const config = CHAINS[key];
-
-  return defineChain({
-    id: config.chainId,
-    name: config.name,
-    nativeCurrency: { name: 'CELO', symbol: 'CELO', decimals: 18 },
-    rpcUrls: {
-      default: { http: [config.rpcUrl] },
-    },
-    blockExplorers: {
-      default: { name: `${config.name} Explorer`, url: config.explorerUrl },
-    },
-  });
-}
+export type ChainClientProvider = (chain: Network | string) => ConnectedClient;
+export type SignerClientProvider = (chain: Network | string) => Signer;
 
 /**
  * Clients are created once and kept.
@@ -54,26 +15,31 @@ export function toViemChain(key: ChainKey): Chain {
  * keyed by chain rather than held as a module-level singleton so a chain added
  * to the config needs no change here.
  */
-const clients = new Map<ChainKey, PublicClient>();
+const clients = new Map<Network | string, ConnectedClient>();
+const signers = new Map<Network | string, Signer>();
 
 /**
  * The default provider: a memoised public client per chain.
- *
- * These point at whatever `rpcUrl` the chain config resolves to, which is the
- * public Forno endpoint unless the environment overrides it. Forno is
- * rate-limited and explicitly best-effort, so a caller that cannot tolerate a
- * transient failure has to handle one — none of the reads in this project
- * treat an RPC error as an answer.
  */
 export const getPublicClient: ChainClientProvider = (chain) => {
   const existing = clients.get(chain);
 
   if (existing) return existing;
 
-  const client = createPublicClient({ chain: toViemChain(chain), transport: http() });
+  const client = createConnectedClient(chain);
   clients.set(chain, client);
 
-  return client as PublicClient;
+  return client;
+};
+
+export const getSignerClient: SignerClientProvider = (chain) => {
+  const existing = signers.get(chain);
+
+  if (existing) return existing;
+
+  const signer = createSigner(chain, OPERATOR_KEY!);
+  signers.set(chain, signer);
+  return signer;
 };
 
 /** Drops memoised clients. For tests that change the RPC environment between cases. */

@@ -6,6 +6,7 @@ import AuthRoute from './routes/auth.route';
 import AccountRoute from './routes/account.route';
 import ApiKeysRoute from './routes/apiKeys.route';
 import PayoutRoute from './routes/payout.route';
+import FacilitatorRoute from './routes/facilitator.route';
 import SkillRoute from './routes/skill.route';
 import validateEnv from './utils/validateEnv';
 
@@ -21,6 +22,7 @@ const app = new App([
   // Serves the integration guide at `/skill.md`. Last, at the root, because it
   // is a single static path with nothing to collide with.
   new SkillRoute(),
+  new FacilitatorRoute(),
 ]);
 
 app.listen();

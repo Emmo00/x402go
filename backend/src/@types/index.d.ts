@@ -36,34 +36,8 @@ declare global {
     rotatedAt?: Date;
   }
 
-  /**
-   * One merchant vault, on one chain.
-   *
-   * `address` is the deterministic address the factory computes for this
-   * merchant. It is a real address from the moment it is derived and does not
-   * imply that a vault has been deployed there — deployment is a separate fact,
-   * read from the chain, and deliberately not stored here. Caching it would
-   * make the record claim something it cannot know.
-   *
-   * The optional fields below are the one exception, and they are not the same
-   * kind of thing: each records an event that has already happened, at the
-   * moment the operator's transaction deployed this vault. They are written
-   * once and never updated, so they cannot go stale the way a `deployed`
-   * boolean would — a vault that was deployed at block N stays deployed at
-   * block N even if the record is later lost or wrong. They exist so a support
-   * question can be answered without a block-explorer search, and nothing
-   * decides anything from them: `isVaultDeployed` reads the chain.
-   */
   interface IVault {
     address: string;
-    chainId: number;
-    createdAt: Date;
-    /** Hash of the transaction that deployed this vault, as sent by the operator. */
-    transactionHash?: string;
-    /** The block that transaction was mined in. */
-    blockNumber?: number;
-    /** When this backend observed the deployment confirmed. */
-    deployedAt?: Date;
   }
 
   interface IUser {
@@ -81,18 +55,9 @@ declare global {
      */
     payTo?: string;
     /**
-     * The merchant's vault addresses, keyed by chain (`celo`, `celoSepolia`).
-     *
-     * A map rather than a list because there is exactly one vault per merchant
-     * per chain — a uniqueness rule the storage enforces for free, instead of
-     * leaving a duplicate entry to be filtered out at read time. Sparse: an
-     * account has no map until its first sign-in derives one.
-     *
-     * Every entry is a cache of `X402VaultFactory.vaultOf(merchant)`. The
-     * factory's answer is authoritative; a stored value that disagrees with it
-     * is a bug to be corrected, never a preference to be honoured.
+     * The merchant's vault address
      */
-    vaults?: Map<string, IVault>;
+    vaults: IVault
   }
 
   type IUserDocument = IUser & Document;

@@ -51,13 +51,21 @@ class PayoutController {
       return res.status(401).json({ message: 'Authentication required' });
     }
 
-    const { payTo } = req.body ?? {};
+    const { payTo, changePayoutSignature } = req.body ?? {};
 
     if (!isValidPayToAddress(payTo)) {
       return res.status(400).json({
         message:
           'payTo must be a 0x-prefixed 20-byte address and must not be the zero address',
       });
+    }
+
+    const payoutAddressSet: IPayoutOutcome = await this.payoutService.getPayTo(String(user._id));
+
+    if (payoutAddressSet.status == "ok" && !changePayoutSignature) {
+      return res.status(400).json({
+        message: 'You need to sign a Change Payout signature with your wallet to change the payout address on your account'
+      })
     }
 
     const outcome: IPayoutOutcome = await this.payoutService.setPayTo(

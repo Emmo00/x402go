@@ -59,30 +59,6 @@ const vaultSchema = new mongoose.Schema<IVault>(
       required: true,
       lowercase: true,
     },
-    chainId: {
-      type: Number,
-      required: true,
-    },
-    createdAt: {
-      type: Date,
-      required: true,
-    },
-
-    // Set only by the deployment path, and only for a vault this backend
-    // deployed itself — a vault deployed by the merchant directly, or found
-    // already deployed, has no transaction of ours to record.
-    transactionHash: {
-      type: String,
-      required: false,
-    },
-    blockNumber: {
-      type: Number,
-      required: false,
-    },
-    deployedAt: {
-      type: Date,
-      required: false,
-    },
   },
   {
     _id: false,
@@ -140,8 +116,7 @@ const userSchema = new mongoose.Schema<IUser>(
     // in carries no `vaults` key at all, and "has none" is distinguishable from
     // "has an empty one" in the raw document.
     vaults: {
-      type: Map,
-      of: vaultSchema,
+      type: vaultSchema,
       required: false,
       default: undefined,
     },
