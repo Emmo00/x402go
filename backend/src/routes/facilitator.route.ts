@@ -1,4 +1,4 @@
-import {Router} from 'express';
+import express, {Router} from 'express';
 import FacilitatorController from '../controllers/facilitator.controller';
 import apiKeyAuth from '../middlewares/apiKeyAuth.middleware';
 
@@ -21,11 +21,11 @@ class FacilitatorRoute implements IAppRoute {
             this.facilitatorController.supported(req, res, next);
         });
 
-        this.router.post(`/:network/verify`, apiKeyAuth, (req, res, next) => {
+        this.router.post(`/:network/verify`,express.json({ limit: "100kb" }), apiKeyAuth, (req, res, next) => {
             this.facilitatorController.verify(req, res, next);
         });
 
-        this.router.post(`/:network/settle`, apiKeyAuth, (req, res, next) => {
+        this.router.post(`/:network/settle`,express.json({ limit: "100kb" }), apiKeyAuth, (req, res, next) => {
             this.facilitatorController.settle(req, res, next);
         });
     }
