@@ -1,4 +1,5 @@
 import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { markConnectIntent } from '../auth/connectIntent';
 import { Badge, Button, cx, truncateAddress } from '../components/ui/primitives';
 
 /**
@@ -8,6 +9,10 @@ import { Badge, Button, cx, truncateAddress } from '../components/ui/primitives'
  * monospace-label system in DESIGN.md. `ConnectButton.Custom` lets the same
  * wagmi state drive our own `.btn` markup, so the control is indistinguishable
  * from the rest of the interface while RainbowKit still owns the connect modal.
+ *
+ * Pressing it records that the connection was asked for, which is what lets the
+ * sign-in tell it apart from a wallet restored on page load. The two presses —
+ * connect, then sign — are one action to the user, so they are one action here.
  */
 export default function WalletButton({ className }) {
   return (
@@ -27,7 +32,12 @@ export default function WalletButton({ className }) {
             })}
           >
             {!connected ? (
-              <Button onClick={openConnectModal}>
+              <Button
+                onClick={() => {
+                  markConnectIntent();
+                  openConnectModal();
+                }}
+              >
                 {ready ? 'Connect wallet' : 'Connect'}
               </Button>
             ) : (

@@ -8,6 +8,7 @@ const { auth } = vi.hoisted(() => ({ auth: { current: null } }));
 vi.mock('../auth/AuthContext', () => ({
   AuthStatus: {
     DISCONNECTED: 'disconnected',
+    CONNECTING: 'connecting',
     UNAUTHENTICATED: 'unauthenticated',
     AWAITING_SIGNATURE: 'awaiting_signature',
     VERIFYING: 'verifying',
@@ -65,10 +66,15 @@ describe('AuthGate', () => {
     expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
   });
 
-  test('reports a rejected signature and lets the user dismiss it', () => {
-    const state = setAuth({
+  // A cancelled signature is a state to come back from, not a failure to
+  // explain — and the button that signs in again is the only way back.
+  test('shows a cancelled signature as its own state', () => {
+    setAuth({
       status: 'unauthenticated',
-      error: { message: 'Signature request rejected in your wallet.' },
+      error: {
+        message: 'Signature request rejected in your wallet.',
+        code: 'signature_rejected',
+      },
     });
 
     render(
@@ -77,10 +83,44 @@ describe('AuthGate', () => {
       </AuthGate>,
     );
 
-    expect(screen.getByText('Signature request rejected in your wallet.')).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'Signature cancelled' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+    expect(screen.queryByText('Signature request rejected in your wallet.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).not.toBeInTheDocument();
+  });
+
+  test('reports any other failure and lets the user dismiss it', () => {
+    const state = setAuth({
+      status: 'unauthenticated',
+      error: { message: 'Cannot reach the x402Go API.', code: 'network_error' },
+    });
+
+    render(
+      <AuthGate>
+        <p>dashboard</p>
+      </AuthGate>,
+    );
+
+    expect(screen.getByText('Cannot reach the x402Go API.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(state.dismissError).toHaveBeenCalledOnce();
+  });
+
+  test('shows the connecting step on the way to the signature prompt', () => {
+    setAuth({ status: 'connecting' });
+
+    render(
+      <AuthGate>
+        <p>dashboard</p>
+      </AuthGate>,
+    );
+
+    expect(screen.getByText(/Preparing your session/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Connecting' })).toBeDisabled();
   });
 
   test('offers a fresh sign-in when the session has expired', () => {
@@ -111,7 +151,7 @@ describe('AuthGate', () => {
       </AuthGate>,
     );
 
-    expect(screen.getByText('Confirm in your wallet')).toBeInTheDocument();
+    expect(screen.getByText('Check your wallet to sign')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Waiting for wallet' })).toBeDisabled();
   });
 });

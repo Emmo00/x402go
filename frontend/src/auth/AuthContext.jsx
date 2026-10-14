@@ -3,17 +3,25 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import { useAccount, useDisconnect, useSignMessage } from 'wagmi';
 import { logout as logoutRequest, requestNonce, verifySignature } from '../api/auth';
 import { ApiError } from '../api/client';
 import { SESSION_TTL_MS } from '../env';
+import { consumeConnectIntent } from './connectIntent';
 import { buildSiweMessage } from './siwe';
 
 /**
  * Authentication state machine.
+ *
+ * Connecting and signing are one action: a connection the user asked for signs
+ * itself in (see the intent flag in `connectIntent`), so the manual button is
+ * only ever a fallback. `CONNECTING` covers the session handshake that follows
+ * the wallet's own connection.
  *
  * The backend keeps the authoritative session in an httpOnly cookie; this
  * context only tracks what the UI needs to render. Nothing sensitive is stored
@@ -27,12 +35,14 @@ import { buildSiweMessage } from './siwe';
  */
 export const AuthStatus = {
   DISCONNECTED: 'disconnected',
+  CONNECTING: 'connecting',
   UNAUTHENTICATED: 'unauthenticated',
   AWAITING_SIGNATURE: 'awaiting_signature',
   VERIFYING: 'verifying',
   AUTHENTICATED: 'authenticated',
   EXPIRED: 'expired',
 };
+
 
 const STORAGE_KEY = 'x402go.session';
 
@@ -77,6 +87,27 @@ function isExpired(session) {
   return Boolean(session) && Date.now() >= session.authenticatedAt + SESSION_TTL_MS;
 }
 
+/**
+ * Resolves once the page is in the foreground.
+ *
+ * A mobile wallet backgrounds the browser for the whole connection, and a
+ * signature request sent while the page is hidden can be missed when the wallet
+ * hands control back. Waiting here means the prompt goes out to a user who is
+ * looking at the app.
+ */
+function whenVisible() {
+  if (document.visibilityState === 'visible') return Promise.resolve();
+
+  return new Promise((resolve) => {
+    const onChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      document.removeEventListener('visibilitychange', onChange);
+      resolve();
+    };
+    document.addEventListener('visibilitychange', onChange);
+  });
+}
+
 /** wagmi surfaces a rejected signature as a user-rejection error. */
 function isUserRejection(cause) {
   if (!cause) return false;
@@ -114,6 +145,12 @@ export function AuthProvider({ children }) {
   const [expired, setExpired] = useState(false);
   // Ticks when the session lapses so the derived status below re-evaluates.
   const [, setClock] = useState(0);
+
+  // Identifies the attempt in flight, and the address it was started for. A
+  // disconnect or an account switch bumps the id, which is how an attempt that
+  // is already away is stopped from writing state when it comes back.
+  const attempt = useRef(0);
+  const attemptAddress = useRef(null);
 
   const clearSession = useCallback(() => {
     clearStoredSession();
@@ -160,34 +197,78 @@ export function AuthProvider({ children }) {
 
     setError(null);
     setExpired(false);
+    setPending(AuthStatus.CONNECTING);
+
+    const run = (attempt.current += 1);
+    attemptAddress.current = address;
+    const isCurrent = () => attempt.current === run;
 
     try {
-      // 1. GET /auth/nonce
+      await whenVisible();
+
+      // 1. GET /auth/nonce — a fresh nonce every attempt, so a retry after a
+      // failed or expired one never reuses the old challenge.
       const nonceResponse = await requestNonce(address);
       const nonce = nonceResponse?.nonce;
       if (!nonce) {
         throw new ApiError('The API did not return a nonce.', { code: 'no_nonce' });
       }
+      if (!isCurrent()) return;
 
       // 2. Sign the EIP-4361 message built from that nonce.
       const message = buildSiweMessage({ address, chainId, nonce });
 
       setPending(AuthStatus.AWAITING_SIGNATURE);
       const signature = await signMessageAsync({ message });
+      if (!isCurrent()) return;
 
       // 3. POST /auth/verify — sets the httpOnly session cookie.
       setPending(AuthStatus.VERIFYING);
       await verifySignature({ address, message, signature });
+      if (!isCurrent()) return;
 
       const next = { address, authenticatedAt: Date.now() };
       writeStoredSession(next);
       setSession(next);
     } catch (cause) {
+      // An abandoned attempt reports nothing: its failure belongs to an address
+      // the user has already left.
+      if (!isCurrent()) return;
       setError(toAuthError(cause));
     } finally {
-      setPending(null);
+      if (isCurrent()) setPending(null);
     }
   }, [address, chainId, signMessageAsync]);
+
+  // A pending attempt belongs to the address it was started for. Disconnecting
+  // or switching accounts mid-flight abandons it: the nonce was issued to the
+  // old address, and neither its result nor its failure may be applied to the
+  // new one. The state is reset so the screen falls back to the manual button.
+  useEffect(() => {
+    if (!pending) return;
+    if (isConnected && address && address === attemptAddress.current) return;
+
+    attempt.current += 1;
+    setPending(null);
+    setError(null);
+  }, [address, isConnected, pending]);
+
+  // Connecting and signing are one action, so a connection the user asked for
+  // signs itself in the moment it lands. Reading the intent is what limits this
+  // to one attempt per connection: a wallet restored on page load, a rejected
+  // signature and an ordinary re-render all leave it unset.
+  //
+  // Laid out before paint, so the connecting state is on screen straight away
+  // rather than flashing the manual sign-in screen for a frame.
+  useLayoutEffect(() => {
+    if (!isConnected || !address || !chainId) return;
+    if (!consumeConnectIntent()) return;
+    // A session for this address is already in hand; signing again would only
+    // replace a live cookie with an identical one.
+    if (session && session.address === address && !isExpired(session)) return;
+
+    signIn();
+  }, [address, chainId, isConnected, session, signIn]);
 
   const signOut = useCallback(async () => {
     setError(null);
@@ -221,7 +302,9 @@ export function AuthProvider({ children }) {
       error,
       isAuthenticated: status === AuthStatus.AUTHENTICATED,
       isBusy:
-        status === AuthStatus.AWAITING_SIGNATURE || status === AuthStatus.VERIFYING,
+        status === AuthStatus.CONNECTING ||
+        status === AuthStatus.AWAITING_SIGNATURE ||
+        status === AuthStatus.VERIFYING,
       address,
       chainId,
       signIn,

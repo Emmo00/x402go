@@ -9,6 +9,10 @@ import WalletButton from './WalletButton';
  * decides what each state looks like. The two steps mirror the API contract in
  * `backend/src/docs/auth.yaml`: get a nonce and sign it, then post the
  * signature to `/auth/verify`.
+ *
+ * Signing follows the connection on its own, so the manual button is a fallback
+ * rather than a step: it is what a rejected signature, a restored connection
+ * and any other failure land on.
  */
 
 const COPY = {
@@ -16,6 +20,11 @@ const COPY = {
     label: 'Authentication · step 1 of 2',
     title: 'Connect your wallet',
     body: 'x402Go identifies you by wallet address. Connecting does not sign anything and sends no transaction.',
+  },
+  [AuthStatus.CONNECTING]: {
+    label: 'Authentication · step 2 of 2',
+    title: 'Connecting',
+    body: 'Preparing your session. Your wallet is asked to sign next — signing is free and sends no transaction.',
   },
   [AuthStatus.UNAUTHENTICATED]: {
     label: 'Authentication · step 2 of 2',
@@ -29,8 +38,8 @@ const COPY = {
   },
   [AuthStatus.AWAITING_SIGNATURE]: {
     label: 'Awaiting signature',
-    title: 'Confirm in your wallet',
-    body: 'Approve the signature request in your wallet to continue.',
+    title: 'Check your wallet to sign',
+    body: 'Approve the signature request in your wallet to continue. On a phone, switch back to your wallet app.',
   },
   [AuthStatus.VERIFYING]: {
     label: 'Verifying',
@@ -39,22 +48,39 @@ const COPY = {
   },
 };
 
+/** The button label for each state that has nothing to press. */
+const BUSY_LABEL = {
+  [AuthStatus.CONNECTING]: 'Connecting',
+  [AuthStatus.AWAITING_SIGNATURE]: 'Waiting for wallet',
+  [AuthStatus.VERIFYING]: 'Verifying',
+};
+
+/**
+ * Shown when the signature prompt was closed without signing. The user knows
+ * what they did, so this is a state to return from rather than a failure to
+ * explain — and it never re-prompts on its own.
+ */
+const CANCELLED = {
+  title: 'Signature cancelled',
+  body: 'Nothing was signed, so you are not signed in. Press Sign in when you are ready to try again.',
+};
+
 function GateActions({ status, onSignIn }) {
   if (status === AuthStatus.DISCONNECTED) {
     return <WalletButton />;
   }
 
-  if (status === AuthStatus.AWAITING_SIGNATURE || status === AuthStatus.VERIFYING) {
+  if (BUSY_LABEL[status]) {
     return (
       <Button disabled aria-busy="true">
-        {status === AuthStatus.AWAITING_SIGNATURE ? 'Waiting for wallet' : 'Verifying'}
+        {BUSY_LABEL[status]}
       </Button>
     );
   }
 
   return (
     <Button onClick={onSignIn}>
-      {status === AuthStatus.EXPIRED ? 'Sign in again' : 'Sign in with wallet'}
+      {status === AuthStatus.EXPIRED ? 'Sign in again' : 'Sign in'}
     </Button>
   );
 }
@@ -67,7 +93,8 @@ export default function AuthGate({ children }) {
   }
 
   const copy = COPY[status] ?? COPY[AuthStatus.UNAUTHENTICATED];
-  const busy = status === AuthStatus.AWAITING_SIGNATURE || status === AuthStatus.VERIFYING;
+  const cancelled = error?.code === 'signature_rejected';
+  const busy = Boolean(BUSY_LABEL[status]);
 
   return (
     <div className="gate">
@@ -89,8 +116,12 @@ export default function AuthGate({ children }) {
             ) : (
               <>
                 <p className="gate__label">{copy.label}</p>
-                <h1 className="gate__title">{copy.title}</h1>
-                <p className="gate__body">{copy.body}</p>
+                {/* Announced in place: the progress states above are a live
+                    region, and the two states that replace them should be too. */}
+                <h1 className="gate__title" aria-live="polite">
+                  {cancelled ? CANCELLED.title : copy.title}
+                </h1>
+                <p className="gate__body">{cancelled ? CANCELLED.body : copy.body}</p>
 
                 {status === AuthStatus.EXPIRED && sessionAddress ? (
                   <p className="gate__session">
@@ -98,7 +129,8 @@ export default function AuthGate({ children }) {
                   </p>
                 ) : null}
 
-                {error ? (
+                {/* A cancelled signature already says everything above it. */}
+                {error && !cancelled ? (
                   <Notice tone="error" title="Sign-in failed">
                     {error.message}
                   </Notice>
@@ -108,7 +140,7 @@ export default function AuthGate({ children }) {
 
             <div className="gate__actions">
               <GateActions status={status} onSignIn={signIn} />
-              {error && !busy ? (
+              {error && !busy && !cancelled ? (
                 <Button variant="link" onClick={dismissError}>
                   Dismiss
                 </Button>
