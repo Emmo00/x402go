@@ -10,6 +10,7 @@ import './index.css';
 
 import App from './App';
 import { AuthProvider } from './auth/AuthContext';
+import { AppErrorBoundary } from './components/ErrorBoundary';
 import { wagmiConfig } from './auth/wagmi';
 import { x402RainbowKitTheme } from './theme/rainbowkitTheme';
 import reportWebVitals from './reportWebVitals';
@@ -25,15 +26,19 @@ const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>
     <BrowserRouter>
-      <WagmiProvider config={wagmiConfig}>
-        <QueryClientProvider client={queryClient}>
-          <RainbowKitProvider theme={x402RainbowKitTheme} modalSize="compact">
-            <AuthProvider>
-              <App />
-            </AuthProvider>
-          </RainbowKitProvider>
-        </QueryClientProvider>
-      </WagmiProvider>
+      {/* Inside the router, so the current location can clear a caught error
+          when the user navigates away from the screen that broke. */}
+      <AppErrorBoundary>
+        <WagmiProvider config={wagmiConfig}>
+          <QueryClientProvider client={queryClient}>
+            <RainbowKitProvider theme={x402RainbowKitTheme} modalSize="compact">
+              <AuthProvider>
+                <App />
+              </AuthProvider>
+            </RainbowKitProvider>
+          </QueryClientProvider>
+        </WagmiProvider>
+      </AppErrorBoundary>
     </BrowserRouter>
   </React.StrictMode>,
 );

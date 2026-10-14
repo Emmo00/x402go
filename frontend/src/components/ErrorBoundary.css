@@ -1,0 +1,71 @@
+/* ==========================================================================
+   x402Go — error boundary fallback
+
+   A full-page screen in the same shape as the sign-in gate: void canvas,
+   left-aligned prose at a capped measure, no shadow, no centred composition.
+   ========================================================================== */
+
+.error-state {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background-color: var(--surface-void);
+}
+
+.error-state__main {
+  display: flex;
+  align-items: flex-start;
+  flex: 1;
+  padding-block: var(--spacing-64) var(--spacing-128);
+}
+
+/* Capped measure, left-aligned: the system never centres a composition. */
+.error-state__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-16);
+  max-width: 560px;
+}
+
+/* The error signal is text, never a fill — the same coral the dashboard's
+   error notices use. DESIGN.md keeps Diagnostic Magenta for terminal
+   readouts, so it is not an option here. */
+.error-state__label {
+  font-family: var(--font-gt-america-mono);
+  font-feature-settings: var(--font-features-mono);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  letter-spacing: var(--tracking-caption);
+  text-transform: uppercase;
+  color: var(--color-syntax-coral, #ff6285);
+}
+
+.error-state__title {
+  font-size: var(--text-heading);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-heading);
+  color: var(--color-bone);
+}
+
+/* Focus lands here when the fallback appears so it is announced in place. The
+   heading is not interactive, so the ring would only be noise. */
+.error-state__title:focus {
+  outline: none;
+}
+
+.error-state__body {
+  font-size: 16px;
+  line-height: 1.38;
+  color: var(--color-steel);
+  max-width: 58ch;
+}
+
+.error-state__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-16);
+  margin-top: var(--spacing-8);
+  flex-wrap: wrap;
+}
