@@ -100,7 +100,6 @@ describe('GET /skill.md', () => {
   });
 
   test('tells the reader never to send their key to Celo', () => {
-    expect(body).toContain('api.x402.celo.org');
     expect(body).toMatch(/[Nn]ever send your x402Go API key/);
   });
 

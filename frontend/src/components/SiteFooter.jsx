@@ -6,11 +6,11 @@ function SiteFooter() {
           Powered by{' '}
           <a
             className="site-footer__link"
-            href="https://x402.celo.org"
+            href="https://celo.org"
             target="_blank"
             rel="noreferrer"
           >
-            x402.celo.org
+            Celo
           </a>
         </p>
       </div>
