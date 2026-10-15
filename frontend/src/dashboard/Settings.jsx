@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { fetchPayoutAddress, updatePayoutAddress } from '../api/dashboard';
+import { useQueryClient } from '@tanstack/react-query';
+import { updatePayoutAddress } from '../api/dashboard';
+import { RESOURCES } from '../api/resources';
 import { useAuth } from '../auth/AuthContext';
 import {
   Address,
@@ -26,7 +28,8 @@ import { useResource } from './useResource';
  */
 export default function Settings() {
   const { notifyUnauthorized } = useAuth();
-  const resource = useResource(fetchPayoutAddress);
+  const queryClient = useQueryClient();
+  const resource = useResource(RESOURCES.payout);
 
   const [value, setValue] = useState('');
   const [touched, setTouched] = useState(false);
@@ -53,7 +56,9 @@ export default function Settings() {
       setUpdated(result?.payTo ?? checksumPayoutAddress(trimmed));
       setValue('');
       setTouched(false);
-      resource.reload();
+      // The payout wallet is a cached read shared with the onboarding gate, so
+      // the write invalidates it rather than refetching through this screen.
+      queryClient.invalidateQueries({ queryKey: RESOURCES.payout.key });
     } catch (cause) {
       if (isUnauthorized(cause)) notifyUnauthorized();
       setActionError(cause);
@@ -110,9 +115,7 @@ export default function Settings() {
       </section>
 
       <Notice title="Authorization required">
-        Changing this wallet requires the authorization the facilitator's API
-        demands for the change. The dashboard submits the request as documented
-        and does not bypass it.
+        Changing this wallet requires authorization from your wallet.
       </Notice>
 
       <Card as="form" onSubmit={handleSubmit} noValidate>

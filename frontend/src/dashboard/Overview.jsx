@@ -1,4 +1,4 @@
-import { fetchOverview } from '../api/dashboard';
+import { RESOURCES } from '../api/resources';
 import { StatCard, StatePanel, StatsGrid } from '../components/ui/primitives';
 import { formatAmount } from './format';
 import PaymentActivityChart from './PaymentActivityChart';
@@ -19,7 +19,7 @@ import VaultAddresses from './VaultAddress';
  * is both real and immediately useful is the one a merchant sees first.
  */
 export default function Overview() {
-  const resource = useResource(fetchOverview);
+  const resource = useResource(RESOURCES.overview);
 
   return (
     <div className="dash-page">

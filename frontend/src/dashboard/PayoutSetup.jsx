@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { updatePayoutAddress } from '../api/dashboard';
+import { RESOURCES } from '../api/resources';
 import { useAuth } from '../auth/AuthContext';
 import { Address, Button, Field, Notice } from '../components/ui/primitives';
 import { describeError, isUnauthorized } from './errors';
@@ -18,6 +20,7 @@ import { checksumPayoutAddress, validatePayoutAddress } from './payoutAddress';
  */
 export default function PayoutSetup({ onConfigured }) {
   const { address, notifyUnauthorized } = useAuth();
+  const queryClient = useQueryClient();
 
   const [value, setValue] = useState('');
   const [touched, setTouched] = useState(false);
@@ -38,8 +41,11 @@ export default function PayoutSetup({ onConfigured }) {
     setPending(true);
     try {
       // `PUT /payout` returns the stored address, so a 200 is the backend
-      // confirming the write — there is nothing further to check.
+      // confirming the write — there is nothing further to check. The cached
+      // read still says `payTo: null`, though, and the settings screen renders
+      // from that entry, so the write invalidates it.
       await updatePayoutAddress(checksumPayoutAddress(trimmed));
+      queryClient.invalidateQueries({ queryKey: RESOURCES.payout.key });
       onConfigured();
     } catch (cause) {
       if (isUnauthorized(cause)) notifyUnauthorized();

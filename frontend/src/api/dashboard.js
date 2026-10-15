@@ -24,18 +24,20 @@ export async function fetchOverview() {
 /* -------------------------------------------------------------------------- */
 
 /**
- * `GET /account` → 200 `{ address, vaults: [{ network, networkName, chainId,
- * address, deployed, explorerUrl }] }`
+ * `GET /account` → 200 `{ address, vaults: { address } | null, apiKey: { suffix,
+ * createdAt, rotatedAt? } | null }`
  *
- * The account and its vault addresses, taken from the session. `address` is the
- * authenticated wallet; each `vaults` entry is that merchant's deterministic
- * vault address on one network, which is the `payTo` an x402 challenge names.
+ * The account, taken from the session. `address` is the authenticated wallet.
  *
- * `deployed` is `false` until a vault is actually deployed at the address, and
- * `null` when the backend could not reach the chain. Neither says anything
- * about whether the address is correct — it is fixed the moment it is derived.
- * A caller that renders `address` without reading `deployed` will imply a vault
- * exists where none does.
+ * `vaults` holds that merchant's deterministic vault address — the `payTo` an
+ * x402 challenge names. It is a single address, identical on every supported
+ * network, and `null` only for an account that has never signed in.
+ *
+ * `apiKey` describes the account's key without its secret: the suffix kept in
+ * the clear, and the dates it was issued and, if it has been replaced, rotated.
+ * The plaintext is returned by create and rotate and nowhere else, and the
+ * stored hash is never part of a response, so `null` means the account holds no
+ * key rather than that the key is being withheld.
  *
  * 401 when the session is gone.
  */
@@ -92,20 +94,4 @@ export function createApiKey() {
  */
 export function rotateApiKey() {
   return apiFetch('/api-keys/rotate', { method: 'POST' });
-}
-
-/**
- * The account's current key, for display. Never the secret.
- *
- * There is no `GET /api-keys` in the specification. The plaintext is disclosed
- * exactly once by create/rotate and the stored hash is never returned, so the
- * suffix and dates of a key that already exists cannot be read back yet.
- *
- * Rather than invent a path, this throws the same `EndpointUnavailableError`
- * the Overview screen uses, and the API-key page renders its "not available
- * yet" panel. When `GET /api-keys` is documented, implement it here — it should
- * return `{ suffix, createdAt, rotatedAt? }` — and the page needs no changes.
- */
-export async function fetchApiKey() {
-  throw new EndpointUnavailableError('API key metadata');
 }

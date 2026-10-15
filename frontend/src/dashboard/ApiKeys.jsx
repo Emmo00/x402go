@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { ApiError } from '../api/client';
-import { createApiKey, fetchApiKey, rotateApiKey } from '../api/dashboard';
+import { createApiKey, rotateApiKey } from '../api/dashboard';
+import { RESOURCES } from '../api/resources';
 import { useAuth } from '../auth/AuthContext';
 import {
   Button,
@@ -17,7 +19,7 @@ import { formatTimestamp } from './format';
 import { useOnboardingHandoff } from './onboardingHandoff';
 import ResourceState, { ActionErrorNotice } from './ResourceState';
 import { useResource } from './useResource';
-import VaultAddresses from './VaultAddress';
+import { PaymentAddressCard } from './VaultAddress';
 
 /** The documented 409 from `POST /api-keys`, in the dashboard's own words. */
 const ALREADY_HAS_KEY =
@@ -36,7 +38,7 @@ function KeyRecord({ meta }) {
     <Card>
       <CardHeader
         title="Active key"
-        description="Only the last four characters are kept readable. The full key is not stored and cannot be shown again."
+        description="Keep your API key private. Never expose it in client-side code or public repositories."
       />
       <dl className="key-meta">
         <div className="key-meta__item">
@@ -65,12 +67,20 @@ function KeyRecord({ meta }) {
  * storage, no URL and no context that outlives the page. Dismissing the reveal
  * drops the plaintext itself, leaving only the fields the API marks as safe to
  * display, so the key cannot be recovered from the running app afterwards.
+ *
+ * The key that is already in force comes from `GET /account`, which is also
+ * where the payment address below comes from — one read of the account serves
+ * both sections, and that resource is handed to the card rather than fetched
+ * again by it. It is cached, so returning to this tab does not re-read it; the
+ * one thing that makes the cache stale is the merchant's own create or rotate,
+ * which invalidates it.
  */
 export default function ApiKeys() {
   const { notifyUnauthorized } = useAuth();
+  const queryClient = useQueryClient();
   const handoff = useOnboardingHandoff();
 
-  const resource = useResource(fetchApiKey);
+  const account = useResource(RESOURCES.account);
 
   // The whole documented payload of the last create/rotate. `apiKey` is the one
   // confidential field in it, and the one that gets cleared on dismissal.
@@ -98,6 +108,11 @@ export default function ApiKeys() {
           return;
         }
 
+        // The account's key metadata has just changed, so the cached copy of
+        // it is the older truth. Invalidating rather than refetching here is
+        // what reaches every screen holding that resource, not just this one.
+        // Only the description is refetched; the key itself lives in `issued`.
+        queryClient.invalidateQueries({ queryKey: RESOURCES.account.key });
         setIssued(result);
         setConfirming(false);
       } catch (cause) {
@@ -107,7 +122,9 @@ export default function ApiKeys() {
 
         if (cause instanceof ApiError && cause.status === 409) {
           // Documented as a conflict rather than a failure: the account already
-          // holds a key, which is a state it is allowed to be in.
+          // holds a key, which is a state it is allowed to be in. It disagreed
+          // with what was cached, so that copy is re-read.
+          queryClient.invalidateQueries({ queryKey: RESOURCES.account.key });
           setConflict(ALREADY_HAS_KEY);
           return;
         }
@@ -117,7 +134,7 @@ export default function ApiKeys() {
         setPending(null);
       }
     },
-    [notifyUnauthorized],
+    [notifyUnauthorized, queryClient],
   );
 
   // Onboarding arrives with the intent to issue a first key already recorded,
@@ -138,8 +155,7 @@ export default function ApiKeys() {
     [],
   );
 
-  const hasKey =
-    Boolean(issued) || (resource.status === 'ready' && Boolean(resource.data?.suffix));
+  const hasKey = Boolean(issued) || Boolean(account.data?.apiKey);
   const busy = pending !== null;
   const creating = pending === 'create' && !issued;
 
@@ -151,11 +167,6 @@ export default function ApiKeys() {
           Manage the keys used to authenticate your x402Go integrations.
         </p>
       </header>
-
-      <Notice title="Keep your API key private">
-        Keep your API key private. Never expose it in client-side code or public
-        repositories.
-      </Notice>
 
       {revealed ? (
         <Card>
@@ -195,13 +206,13 @@ export default function ApiKeys() {
           <KeyRecord meta={issued} />
         ) : (
           <ResourceState
-            resource={resource}
+            resource={account}
             label="API key"
             loadingTitle="Loading your API key…"
           >
             {(data) =>
-              data?.suffix ? (
-                <KeyRecord meta={data} />
+              data?.apiKey ? (
+                <KeyRecord meta={data.apiKey} />
               ) : (
                 <StatePanel
                   label="No API key"
@@ -235,7 +246,12 @@ export default function ApiKeys() {
             title="Create API key"
             description="Issue the key your application uses to authenticate against the facilitator."
             action={
-              <Button onClick={() => run('create')} disabled={busy}>
+              // The account is the authority on whether a key already exists,
+              // and until it has answered this card would offer a second one.
+              <Button
+                onClick={() => run('create')}
+                disabled={busy || account.status === 'loading'}
+              >
                 {pending === 'create' ? 'Creating…' : 'Create API key'}
               </Button>
             }
@@ -257,7 +273,7 @@ export default function ApiKeys() {
       {/* Last on the page, deliberately: a key is disclosed exactly once by
           create and rotate, and nothing may sit between the action and the
           value it reveals. */}
-      <VaultAddresses />
+      <PaymentAddressCard resource={account} />
     </div>
   );
 }

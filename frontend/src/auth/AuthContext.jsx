@@ -9,8 +9,10 @@ import {
   useState,
 } from 'react';
 import { useAccount, useDisconnect, useSignMessage } from 'wagmi';
+import { useQueryClient } from '@tanstack/react-query';
 import { logout as logoutRequest, requestNonce, verifySignature } from '../api/auth';
 import { ApiError } from '../api/client';
+import { CACHE_SCOPE } from '../api/resources';
 import { SESSION_TTL_MS } from '../env';
 import { consumeConnectIntent } from './connectIntent';
 import { buildSiweMessage } from './siwe';
@@ -138,6 +140,7 @@ export function AuthProvider({ children }) {
   const { address, chainId, isConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
   const { disconnect } = useDisconnect();
+  const queryClient = useQueryClient();
 
   const [session, setSession] = useState(readStoredSession);
   const [pending, setPending] = useState(null);
@@ -191,6 +194,18 @@ export function AuthProvider({ children }) {
       setExpired(false);
     }
   }, [address, isConnected, session, clearSession]);
+
+  // Cached reads belong to the session that made them. With no session — signed
+  // out, expired, a 401, or a different wallet — they are all dropped, so the
+  // next merchant to sign in on this browser cannot be shown the previous
+  // account's address out of an entry still inside its stale time. Run after
+  // the commit, by which point the dashboard has unmounted and nothing is
+  // observing them. Scoped to this app's prefix, which leaves wagmi's own
+  // entries in the same client alone.
+  useEffect(() => {
+    if (session) return;
+    queryClient.removeQueries({ queryKey: CACHE_SCOPE });
+  }, [session, queryClient]);
 
   const signIn = useCallback(async () => {
     if (!address || !chainId) return;

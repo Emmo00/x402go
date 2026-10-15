@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { fetchPayoutAddress } from '../api/dashboard';
+import { RESOURCES } from '../api/resources';
 import { Button, StatePanel } from '../components/ui/primitives';
 import { DASHBOARD_ROUTES } from '../routes';
 import { OnboardingHandoff } from './onboardingHandoff';
@@ -41,11 +41,11 @@ function GateShell({ children }) {
 }
 
 export default function OnboardingGate({ children }) {
-  const resource = useResource(fetchPayoutAddress);
+  const resource = useResource(RESOURCES.payout);
   const navigate = useNavigate();
 
-  // Set once `PUT /payout` has been accepted. The response already confirms the
-  // stored value, so re-reading it would only add a round trip.
+  // Set once `PUT /payout` has been accepted, so the gate opens on the response
+  // it already has rather than waiting for the cached read to be refetched.
   const [configured, setConfigured] = useState(false);
 
   // The intent to issue a first key, which the API-key screen picks up once it
