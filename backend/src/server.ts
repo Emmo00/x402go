@@ -19,10 +19,12 @@ const app = new App([
   new AccountRoute(),
   new ApiKeysRoute(),
   new PayoutRoute(),
-  // Serves the integration guide at `/skill.md`. Last, at the root, because it
-  // is a single static path with nothing to collide with.
   new SkillRoute(),
   new FacilitatorRoute(),
 ]);
 
-app.listen();
+if (process.env.VERCEL !== '1') {
+  app.listen();
+}
+
+export default app.getServer();

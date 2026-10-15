@@ -7,7 +7,7 @@ import logger from 'morgan';
 import errorMiddleware from './middlewares/error.middleware';
 import swaggerIgnite from './utils/swaggerIgnite';
 import session from 'express-session';
-import MongoStore from 'connect-mongo'
+import MongoStore from 'connect-mongo';
 
 class App {
   public app: express.Application;
@@ -70,7 +70,7 @@ class App {
       this.app.use(hpp());
       this.app.use(helmet());
       this.app.use(logger('combined'));
-      this.app.use(cors({ origin: 'your.domain.com', credentials: true }));
+      this.app.use(cors({ origin: '*' }));
     } else {
       this.app.use(logger('dev'));
       this.app.use(cors({ origin: true, credentials: true }));
