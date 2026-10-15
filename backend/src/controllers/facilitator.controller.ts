@@ -24,6 +24,7 @@ class FacilitatorController {
   }
 
   async verify(req: Request, res: Response, next: NextFunction) {
+    console.log('verify request body:', req.body);
     const merchant = req.user!;
 
     try {
@@ -44,8 +45,11 @@ class FacilitatorController {
         deploymentContext: ctx.deployment,
         operatorAddress: OPERATOR_ADDRESS! as Address,
       });
+      console.log('Verify result:', result);
+
       return res.json(result); // 200 whether valid or not: an invalid payment is a result, not an HTTP error
     } catch (err) {
+      console.log('Error during verification:', err);
       return res.status(500).json({ isValid: false, invalidReason: 'unexpected_verify_error' });
     }
   }
@@ -60,6 +64,7 @@ class FacilitatorController {
         merchant: merchantAddress,
         payout: merchantPayout,
       });
+
       if ('reason' in ctx) {
         return res.status(ctx.status).json({
           success: false,
@@ -70,9 +75,10 @@ class FacilitatorController {
         });
       }
 
-      const result = settle(ctx.client as EvmSigner, ctx.payload, ctx.requirements, {
+      const result = await settle(ctx.client as EvmSigner, ctx.payload, ctx.requirements, {
         deploymentContext: ctx.deployment,
       });
+      console.log('Settle result:', result);
 
       return res.json(result); // 200 for success and for protocol-level failures
     } catch (err) {

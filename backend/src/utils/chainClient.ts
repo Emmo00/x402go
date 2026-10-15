@@ -36,6 +36,7 @@ export const getSignerClient: SignerClientProvider = (chain) => {
   const existing = signers.get(chain);
 
   if (existing) return existing;
+  if (!OPERATOR_KEY) throw new Error("OPERATOR_KEY is not set in environment variables");
 
   const signer = createSigner(chain, OPERATOR_KEY!);
   signers.set(chain, signer);
