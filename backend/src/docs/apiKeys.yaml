@@ -21,6 +21,11 @@ paths:
         Evaluation of "this account has no key yet" and the write that creates
         one are a single atomic database operation, so two concurrent requests
         cannot both succeed.
+
+
+        The key's metadata — everything in the response except `apiKey` itself —
+        is readable afterwards from `GET /account`, so a client does not need a
+        separate read path to display it.
       consumes:
         - application/json
       produces:

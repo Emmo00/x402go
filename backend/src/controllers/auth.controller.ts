@@ -49,7 +49,9 @@ class AuthController {
           try {
             await this.accountService.ensureVault(userId, address);
           } catch (error) {
-            console.error('[auth] could not record vault addresses at sign-in', error);
+            return res
+              .status(500)
+              .json({ success: false, error: 'Failed to ensure vault address' });
           }
         }
 

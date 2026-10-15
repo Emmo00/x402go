@@ -55,9 +55,12 @@ declare global {
      */
     payTo?: string;
     /**
-     * The merchant's vault address
+     * The merchant's vault address — one address, the same on every supported
+     * network. Optional: it is recorded when the merchant signs in, so an
+     * account that has never done so has none, and `default: undefined` keeps
+     * "has none" distinct from "has an empty one" in the document.
      */
-    vaults: IVault
+    vaults?: IVault
   }
 
   type IUserDocument = IUser & Document;

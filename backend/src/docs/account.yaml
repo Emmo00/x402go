@@ -39,6 +39,12 @@ paths:
         over it, not part of it.
 
 
+        The account's API key is described as part of this response, without its
+        secret, so a client can show which key is in force without a second
+        request. The plaintext key appears only in the response that issues it,
+        and the stored hash is never returned by any route.
+
+
         The account is taken from the authenticated session, so one account can
         never read another's vaults.
       produces:
@@ -86,6 +92,35 @@ definitions:
           address on each, whether or not they have used it.
         items:
           $ref: '#/definitions/accountVault'
+      apiKey:
+        type: object
+        x-nullable: true
+        description: >
+          The account's API key, described without its secret. `null` when the
+          account has never created one; an account may hold at most one key, so
+          there is no list. The plaintext key is returned only by
+          `POST /api-keys` and `POST /api-keys/rotate`, and the stored hash is
+          never part of any response — a client that needs the key itself has to
+          keep it when it is issued.
+        properties:
+          suffix:
+            type: string
+            description: >
+              The last four characters of the key, kept in the clear so the key
+              can be recognised. Not a secret and not usable to authenticate.
+            example: a91f
+          createdAt:
+            type: string
+            format: date-time
+            description: When this key was issued.
+            example: '2026-10-05T09:41:07.412Z'
+          rotatedAt:
+            type: string
+            format: date-time
+            description: >
+              When this key replaced a previous one. Absent when the key has
+              never been rotated, which is the normal state for a first key.
+            example: '2026-10-06T10:00:00.000Z'
   accountVault:
     type: object
     properties:

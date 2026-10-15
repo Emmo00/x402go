@@ -13,13 +13,15 @@ export class AccountService {
       throw new Error(`User with ID ${userId} not found`);
     }
 
-    user.vaults.address = await this.fetchDeterministicVaultAddress(address);
+    if (!user?.vaults?.address) {
+      user.vaults = { address: await this.fetchDeterministicVaultAddress(address) };
 
-    await user.save();
+      await user.save();
+    }
   }
 
   async fetchDeterministicVaultAddress(merchantAddress: string): Promise<string> {
-    const vaultAddress = getPublicClient('celo').readContract({
+    const vaultAddress = getPublicClient('celo-sepolia').readContract({
       address: FACTORY,
       abi: factoryAbi,
       functionName: 'vaultOf',
