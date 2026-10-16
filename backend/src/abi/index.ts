@@ -1,6 +1,6 @@
 export {
   factoryAbi,
-  vaultAbi,
+  relayerAbi,
   permit2Abi,
   erc3009Abi,
   erc20Abi,
