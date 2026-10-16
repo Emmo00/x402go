@@ -21,7 +21,7 @@ export class AccountService {
   }
 
   async fetchDeterministicVaultAddress(merchantAddress: string): Promise<string> {
-    const vaultAddress = getPublicClient('celo-sepolia').readContract({
+    const vaultAddress = getPublicClient('celo').readContract({
       address: FACTORY,
       abi: factoryAbi,
       functionName: 'vaultOf',

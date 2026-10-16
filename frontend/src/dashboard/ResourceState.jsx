@@ -20,14 +20,11 @@ export default function ResourceState({ resource, label, loadingTitle, children 
   if (status === 'endpoint_unavailable') {
     return (
       <StatePanel
-        label="Endpoint not available"
+        label="Analytics"
         title="Not available yet"
         data-unavailable={error.endpoint}
       >
-        The x402Go API does not expose <code>{error.endpoint}</code> yet, so
-        there is nothing to read from — and no sample data is shown in its
-        place. When that endpoint exists, implement it in{' '}
-        <code>src/api/dashboard.js</code>; this screen needs no changes.
+        Coming Soon
       </StatePanel>
     );
   }
