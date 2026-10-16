@@ -17,8 +17,8 @@
     "emitDecoratorMetadata": true,
     "typeRoots": [
       "node_modules/@types",
-      "node_modules_ef/@types/*.ts",
-      "./src/@types",
+      "node_modules_ef/@types",
+      "./src/@types/*.d.ts",
       "facilitator/src/**/*.ts"
     ],
     "types": ["node", "bun"]
