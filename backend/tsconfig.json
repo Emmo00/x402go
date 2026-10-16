@@ -14,8 +14,7 @@
     "alwaysStrict": true,
     "noImplicitAny": true,
     "experimentalDecorators": true,
-    "emitDecoratorMetadata": true,
-    "types": ["bun"]
+    "emitDecoratorMetadata": true
   },
   "include": [
     "src/**/*.ts",
