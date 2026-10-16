@@ -2,11 +2,11 @@
   "compilerOptions": {
     "sourceMap": true,
     "target": "ES2020",
-    "rootDir": "..",
+    "rootDir": ".",
     "outDir": "./dist",
     "paths": {
       "@/*": ["./src/*"],
-      "@facilitator/*": ["../facilitator/src/*"],
+      "@facilitator/*": ["./facilitator/src/*"],
       "@backend/*": ["./src/*"]
     },
     "module": "esnext",
@@ -15,7 +15,12 @@
     "noImplicitAny": true,
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
-    "typeRoots": ["node_modules/@types", "node_modules_ef/@types", "./src/@types"],
+    "typeRoots": [
+      "node_modules/@types",
+      "node_modules_ef/@types",
+      "./src/@types",
+      "facilitator/src/**/*.ts"
+    ],
     "types": ["node", "bun"]
   },
   "include": ["src/**/*.ts", "src/**/*.d.ts"],
