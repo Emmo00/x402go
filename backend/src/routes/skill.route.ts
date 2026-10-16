@@ -24,9 +24,8 @@ import HttpException from '../exceptions/HttpException';
  * a disk read in front of every agent that fetches it.
  */
 
-/** Resolved from this module, not from the working directory, so it is the same
- * file whether the process was started from `src/` or from `dist/`. */
-const SKILL_PATH = resolve(import.meta.dir, '..', '..', 'skill.md');
+/** Resolved from the backend working directory, shared by source and built runs. */
+const SKILL_PATH = resolve(process.cwd(), 'skill.md');
 
 let cached: string | null = null;
 
