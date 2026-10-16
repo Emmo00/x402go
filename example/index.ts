@@ -1,4 +1,3 @@
-// scripts/test-x402.ts
 import 'dotenv/config';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
@@ -21,7 +20,7 @@ const PAY_TO = need('PAY_TO'); // your vault address from the dashboard
 const signer = privateKeyToAccount(need('EVM_PRIVATE_KEY') as `0x${string}`);
 
 const NETWORK = (process.env.NETWORK ?? 'eip155:11142220') as `${string}:${string}`;
-const ASSET = process.env.ASSET ?? '0x01C5C0122039549AD1493B8220cABEdD739BC44E';
+const ASSET = process.env.ASSET ?? '0x01C5C0122039549AD1493B8220cABEdD739BC44E'; // default USDC
 const ASSET_NAME = process.env.ASSET_NAME ?? 'USDC';
 const ASSET_VERSION = process.env.ASSET_VERSION ?? '2';
 const AMOUNT = process.env.AMOUNT ?? '10000'; // atomic units of ($0.01); must exceed the token's fee
