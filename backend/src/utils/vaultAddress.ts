@@ -20,7 +20,7 @@ import {
  * a real `payTo` address on a merchant's dashboard the moment they sign in,
  * without deploying anything and without waiting on an RPC call.
  *
- * What this module is *not*: the authority. `X402VaultFactory.vaultOf` is, and
+ * What this module is *not*: the authority. `X402PaymentRelayerFactory.vaultOf` is, and
  * `VaultFactoryService` reconciles against it. This is a cache of that answer
  * that happens to be computable without a network. The two agree because the
  * constants below are a transcription of Solady's `LibClone`, checked against
@@ -135,7 +135,7 @@ export function vaultInitCodeHash(implementation: Address, merchant: Address): H
 /**
  * The address a merchant's vault will occupy, deployed or not.
  *
- * Equivalent to `X402VaultFactory.vaultOf(merchant)`, computed locally. Returns
+ * Equivalent to `X402PaymentRelayerFactory.vaultOf(merchant)`, computed locally. Returns
  * a checksummed address: the vault address is shown to a human who may compare
  * it against a block explorer, and an all-lowercase string is harder to verify
  * by eye than one that carries its own checksum.

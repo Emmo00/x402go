@@ -15,7 +15,7 @@ const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 
 /**
  * The zero address is not a payable destination: transfers to it are burned,
- * and `X402Vault.changePayout` rejects it outright with `InvalidAddress`. It is
+ * and `X402PaymentRelayer.changePayout` rejects it outright with `InvalidAddress`. It is
  * refused here so an account cannot store a payout address that would silently
  * swallow every settlement.
  */

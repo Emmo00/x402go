@@ -2,8 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {X402Base} from "./utils/X402Base.sol";
-import {X402Vault} from "../src/X402Vault.sol";
-import {IX402Vault} from "../src/interfaces/IX402Vault.sol";
+import {X402PaymentRelayer} from "../src/X402PaymentRelayer.sol";
+import {IX402PaymentRelayer} from "../src/interfaces/IX402PaymentRelayer.sol";
 import {IPermit2} from "../src/interfaces/IPermit2.sol";
 import {IX402ExactPermit2Proxy} from "../src/interfaces/IX402ExactPermit2Proxy.sol";
 import {
@@ -43,7 +43,7 @@ contract SettlePermit2Test is X402Base {
         bytes memory sig
     ) internal {
         vm.prank(caller);
-        X402Vault(vault).settleWithPermit2(permit, payer, wit, sig);
+        X402PaymentRelayer(vault).settleWithPermit2(permit, payer, wit, sig);
     }
 
     /// @dev The three payload pieces, signed by `payerPk` for `recipient`, naming `tokenContract`.
@@ -90,7 +90,7 @@ contract SettlePermit2Test is X402Base {
             _args(value, keccak256("p"));
 
         vm.expectEmit(true, true, true, true, vault);
-        emit IX402Vault.Settle(merchant, address(token6), payer, value - fee, fee);
+        emit IX402PaymentRelayer.Settle(merchant, address(token6), payer, value - fee, fee);
 
         _settleAs(stranger, permit, wit, sig);
     }
@@ -119,7 +119,7 @@ contract SettlePermit2Test is X402Base {
             _argsFor(overrideVault, address(token6), value, keccak256("override"));
 
         vm.prank(stranger);
-        X402Vault(overrideVault).settleWithPermit2(permit, payer, wit, sig);
+        X402PaymentRelayer(overrideVault).settleWithPermit2(permit, payer, wit, sig);
 
         assertEq(token6.balanceOf(payoutAddr), value - fee);
         assertEq(token6.balanceOf(address(factory)), fee);
@@ -150,7 +150,7 @@ contract SettlePermit2Test is X402Base {
 
         assertEq(wit.to, merchant, "the signature really does name the merchant");
 
-        vm.expectRevert(IX402Vault.InvalidRecipient.selector);
+        vm.expectRevert(IX402PaymentRelayer.InvalidRecipient.selector);
         _settleAs(stranger, permit, wit, sig);
 
         assertEq(token6.balanceOf(vault), 0);
@@ -161,7 +161,7 @@ contract SettlePermit2Test is X402Base {
         (IPermit2.PermitTransferFrom memory permit, IX402ExactPermit2Proxy.Witness memory wit, bytes memory sig) =
             _argsFor(payer, address(token6), 100e6, keccak256("self"));
 
-        vm.expectRevert(IX402Vault.InvalidRecipient.selector);
+        vm.expectRevert(IX402PaymentRelayer.InvalidRecipient.selector);
         _settleAs(stranger, permit, wit, sig);
     }
 
@@ -171,7 +171,7 @@ contract SettlePermit2Test is X402Base {
         (IPermit2.PermitTransferFrom memory permit, IX402ExactPermit2Proxy.Witness memory wit,) =
             _argsFor(merchant, address(token6), 100e6, keccak256("bogus"));
 
-        vm.expectRevert(IX402Vault.InvalidRecipient.selector);
+        vm.expectRevert(IX402PaymentRelayer.InvalidRecipient.selector);
         _settleAs(stranger, permit, wit, hex"deadbeef");
     }
 
@@ -181,7 +181,7 @@ contract SettlePermit2Test is X402Base {
         (IPermit2.PermitTransferFrom memory permit, IX402ExactPermit2Proxy.Witness memory wit, bytes memory sig) =
             _args(_fee(address(token6)), keccak256("at-fee"));
 
-        vm.expectRevert(IX402Vault.AmountBelowFee.selector);
+        vm.expectRevert(IX402PaymentRelayer.AmountBelowFee.selector);
         _settleAs(stranger, permit, wit, sig);
     }
 
@@ -189,7 +189,7 @@ contract SettlePermit2Test is X402Base {
         (IPermit2.PermitTransferFrom memory permit, IX402ExactPermit2Proxy.Witness memory wit, bytes memory sig) =
             _args(1, keccak256("below-fee"));
 
-        vm.expectRevert(IX402Vault.AmountBelowFee.selector);
+        vm.expectRevert(IX402PaymentRelayer.AmountBelowFee.selector);
         _settleAs(stranger, permit, wit, sig);
     }
 
@@ -273,7 +273,7 @@ contract SettlePermit2Test is X402Base {
         // `from` names someone else than the key that signed.
         vm.expectRevert(bytes("invalid permit signature"));
         vm.prank(stranger);
-        X402Vault(vault).settleWithPermit2(permit, stranger, wit, sig);
+        X402PaymentRelayer(vault).settleWithPermit2(permit, stranger, wit, sig);
     }
 
     function test_settleWithPermit2_tamperedAmountReverts() public {
@@ -339,7 +339,7 @@ contract SettlePermit2Test is X402Base {
             _args(100e6, keccak256("lying-zero"));
 
         // The proxy ignores the signature entirely, so a failure here can only be the delta check.
-        vm.expectRevert(IX402Vault.AmountNotReceived.selector);
+        vm.expectRevert(IX402PaymentRelayer.AmountNotReceived.selector);
         _settleAs(stranger, permit, wit, sig);
     }
 
@@ -353,7 +353,7 @@ contract SettlePermit2Test is X402Base {
         (IPermit2.PermitTransferFrom memory permit, IX402ExactPermit2Proxy.Witness memory wit, bytes memory sig) =
             _args(100e6, keccak256("lying-half"));
 
-        vm.expectRevert(IX402Vault.AmountNotReceived.selector);
+        vm.expectRevert(IX402PaymentRelayer.AmountNotReceived.selector);
         _settleAs(stranger, permit, wit, sig);
 
         assertEq(token6.balanceOf(vault), 0, "the partial delivery is rolled back with the revert");
@@ -372,7 +372,7 @@ contract SettlePermit2Test is X402Base {
         (IPermit2.PermitTransferFrom memory permit, IX402ExactPermit2Proxy.Witness memory wit, bytes memory sig) =
             _args(100e6, keccak256("stray"));
 
-        vm.expectRevert(IX402Vault.AmountNotReceived.selector);
+        vm.expectRevert(IX402PaymentRelayer.AmountNotReceived.selector);
         _settleAs(stranger, permit, wit, sig);
 
         assertEq(token6.balanceOf(vault), 1_000e6, "the stray balance is untouched");

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {X402Base} from "./utils/X402Base.sol";
-import {IX402VaultFactory} from "../src/interfaces/IX402VaultFactory.sol";
+import {IX402PaymentRelayerFactory} from "../src/interfaces/IX402PaymentRelayerFactory.sol";
 import {MockERC20} from "./utils/Mocks.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 
@@ -28,7 +28,7 @@ contract FactoryFeesTest is X402Base {
     }
 
     function test_withdrawFees_rejectsZeroRecipient() public {
-        vm.expectRevert(IX402VaultFactory.InvalidAddress.selector);
+        vm.expectRevert(IX402PaymentRelayerFactory.InvalidAddress.selector);
         vm.prank(owner);
         factory.withdrawFees(_addrs(address(token6)), address(0));
     }
@@ -36,7 +36,7 @@ contract FactoryFeesTest is X402Base {
     function test_withdrawFees_rejectsZeroRecipientEvenWithNothingToSweep() public {
         // The recipient check is first, so a sweep of an empty list to address(0) is still refused
         // rather than silently doing nothing.
-        vm.expectRevert(IX402VaultFactory.InvalidAddress.selector);
+        vm.expectRevert(IX402PaymentRelayerFactory.InvalidAddress.selector);
         vm.prank(owner);
         factory.withdrawFees(new address[](0), address(0));
     }
@@ -73,7 +73,7 @@ contract FactoryFeesTest is X402Base {
         token6.mint(address(factory), 1_000e6);
 
         vm.expectEmit(true, true, false, true, address(factory));
-        emit IX402VaultFactory.FeesWithdrawn(address(token6), feeRecipient, 1_000e6);
+        emit IX402PaymentRelayerFactory.FeesWithdrawn(address(token6), feeRecipient, 1_000e6);
 
         _sweep(_addrs(address(token6)), feeRecipient);
     }
@@ -82,7 +82,7 @@ contract FactoryFeesTest is X402Base {
         // The brief's point: the event records that the token was *visited*. A drained token and a
         // token nobody has paid in are otherwise indistinguishable from the outside.
         vm.expectEmit(true, true, false, true, address(factory));
-        emit IX402VaultFactory.FeesWithdrawn(address(token6), feeRecipient, 0);
+        emit IX402PaymentRelayerFactory.FeesWithdrawn(address(token6), feeRecipient, 0);
 
         _sweep(_addrs(address(token6)), feeRecipient);
     }
@@ -91,11 +91,11 @@ contract FactoryFeesTest is X402Base {
         token6.mint(address(factory), 7e6);
 
         vm.expectEmit(true, true, false, true, address(factory));
-        emit IX402VaultFactory.FeesWithdrawn(address(token6), feeRecipient, 7e6);
+        emit IX402PaymentRelayerFactory.FeesWithdrawn(address(token6), feeRecipient, 7e6);
         _sweep(_addrs(address(token6)), feeRecipient);
 
         vm.expectEmit(true, true, false, true, address(factory));
-        emit IX402VaultFactory.FeesWithdrawn(address(token6), feeRecipient, 0);
+        emit IX402PaymentRelayerFactory.FeesWithdrawn(address(token6), feeRecipient, 0);
         _sweep(_addrs(address(token6)), feeRecipient);
 
         assertEq(token6.balanceOf(feeRecipient), 7e6);
@@ -109,9 +109,9 @@ contract FactoryFeesTest is X402Base {
         tokens[1] = address(token18);
 
         vm.expectEmit(true, true, false, true, address(factory));
-        emit IX402VaultFactory.FeesWithdrawn(address(token6), feeRecipient, 0);
+        emit IX402PaymentRelayerFactory.FeesWithdrawn(address(token6), feeRecipient, 0);
         vm.expectEmit(true, true, false, true, address(factory));
-        emit IX402VaultFactory.FeesWithdrawn(address(token18), feeRecipient, 3e18);
+        emit IX402PaymentRelayerFactory.FeesWithdrawn(address(token18), feeRecipient, 3e18);
 
         _sweep(tokens, feeRecipient);
     }

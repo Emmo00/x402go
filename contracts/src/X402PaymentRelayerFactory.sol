@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {X402Vault} from "./X402Vault.sol";
+import {X402PaymentRelayer} from "./X402PaymentRelayer.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
 import {IPermit2} from "./interfaces/IPermit2.sol";
-import {IX402Vault} from "./interfaces/IX402Vault.sol";
-import {IX402VaultFactory} from "./interfaces/IX402VaultFactory.sol";
+import {IX402PaymentRelayer} from "./interfaces/IX402PaymentRelayer.sol";
+import {IX402PaymentRelayerFactory} from "./interfaces/IX402PaymentRelayerFactory.sol";
 import {IX402ExactPermit2Proxy} from "./interfaces/IX402ExactPermit2Proxy.sol";
 import {OwnableRoles} from "solady/auth/OwnableRoles.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 
-/// @title X402VaultFactory
+/// @title X402PaymentRelayerFactory
 /// @author emmo00 (https://github.com/emmo00)
-/// @notice Factory contract for creating X402Vault instances for merchants.
-contract X402VaultFactory is IX402VaultFactory, OwnableRoles {
+/// @notice Factory contract for creating X402PaymentRelayer instances for merchants.
+contract X402PaymentRelayerFactory is IX402PaymentRelayerFactory, OwnableRoles {
     address public immutable implementation;
 
     uint256 public constant FEE_DENOMINATOR = 10_000; // Basis points denominator
@@ -26,17 +26,17 @@ contract X402VaultFactory is IX402VaultFactory, OwnableRoles {
     constructor(address _owner, address _operator) {
         _initializeOwner(_owner);
         _grantRoles(_operator, OPERATOR_ROLE);
-        implementation = address(new X402Vault(address(this)));
+        implementation = address(new X402PaymentRelayer(address(this)));
     }
 
     function createVaultAndSettle(
         address merchant,
         address payout,
         address token,
-        IX402Vault.Eip3009Authorization calldata auth
+        IX402PaymentRelayer.Eip3009Authorization calldata auth
     ) external returns (address vault) {
         vault = createVault(merchant, payout);
-        IX402Vault(vault).settle(token, auth);
+        IX402PaymentRelayer(vault).settle(token, auth);
     }
 
     function createVaultAndSettleWithPermit2(
@@ -48,7 +48,7 @@ contract X402VaultFactory is IX402VaultFactory, OwnableRoles {
         bytes calldata signature
     ) external returns (address vault) {
         vault = createVault(merchant, payout);
-        IX402Vault(vault).settleWithPermit2(permit, from, witness, signature);
+        IX402PaymentRelayer(vault).settleWithPermit2(permit, from, witness, signature);
     }
 
     /// @dev Creates a new vault for the given merchant, with the given payout address.
@@ -75,7 +75,7 @@ contract X402VaultFactory is IX402VaultFactory, OwnableRoles {
 
         vault = LibClone.cloneDeterministic(implementation, args, salt);
 
-        if (payout != merchant) IX402Vault(vault).initPayout(payout);
+        if (payout != merchant) IX402PaymentRelayer(vault).initPayout(payout);
 
         emit VaultCreated(merchant, vault, payout);
     }

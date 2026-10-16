@@ -2,8 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {X402Base} from "./utils/X402Base.sol";
-import {X402Vault} from "../src/X402Vault.sol";
-import {IX402Vault} from "../src/interfaces/IX402Vault.sol";
+import {X402PaymentRelayer} from "../src/X402PaymentRelayer.sol";
+import {IX402PaymentRelayer} from "../src/interfaces/IX402PaymentRelayer.sol";
 
 /// @dev Suite D — vault-level basics: payout initialisation, implementation isolation, and the
 /// storage layout the vault depends on.
@@ -18,31 +18,31 @@ contract VaultBasicsTest is X402Base {
     // -------------------------------------------------------------- initPayout
 
     function test_initPayout_onlyFromTheFactory() public {
-        vm.expectRevert(IX402Vault.Unauthorized.selector);
+        vm.expectRevert(IX402PaymentRelayer.Unauthorized.selector);
         vm.prank(stranger);
-        X402Vault(vault).initPayout(payoutAddr);
+        X402PaymentRelayer(vault).initPayout(payoutAddr);
 
-        vm.expectRevert(IX402Vault.Unauthorized.selector);
+        vm.expectRevert(IX402PaymentRelayer.Unauthorized.selector);
         vm.prank(merchant);
-        X402Vault(vault).initPayout(payoutAddr);
+        X402PaymentRelayer(vault).initPayout(payoutAddr);
 
-        vm.expectRevert(IX402Vault.Unauthorized.selector);
+        vm.expectRevert(IX402PaymentRelayer.Unauthorized.selector);
         vm.prank(owner);
-        X402Vault(vault).initPayout(payoutAddr);
+        X402PaymentRelayer(vault).initPayout(payoutAddr);
     }
 
     function test_initPayout_rejectsZero() public {
-        vm.expectRevert(IX402Vault.InvalidAddress.selector);
+        vm.expectRevert(IX402PaymentRelayer.InvalidAddress.selector);
         vm.prank(address(factory));
-        X402Vault(vault).initPayout(address(0));
+        X402PaymentRelayer(vault).initPayout(address(0));
     }
 
     function test_initPayout_isOneShot() public {
         address withOverride = _deploy(makeAddr("m2"), payoutAddr);
 
-        vm.expectRevert(IX402Vault.AlreadyInitialized.selector);
+        vm.expectRevert(IX402PaymentRelayer.AlreadyInitialized.selector);
         vm.prank(address(factory));
-        X402Vault(withOverride).initPayout(payoutAddr);
+        X402PaymentRelayer(withOverride).initPayout(payoutAddr);
     }
 
     function test_initPayout_remainsOpenWhenThePayoutWasNotOverridden() public {
@@ -53,9 +53,9 @@ contract VaultBasicsTest is X402Base {
         assertEq(uint256(vm.load(vault, bytes32(uint256(0)))), 0);
 
         vm.prank(address(factory));
-        X402Vault(vault).initPayout(payoutAddr);
+        X402PaymentRelayer(vault).initPayout(payoutAddr);
 
-        assertEq(X402Vault(vault).payout(), payoutAddr);
+        assertEq(X402PaymentRelayer(vault).payout(), payoutAddr);
     }
 
     // ------------------------------------------------- implementation isolation
@@ -65,12 +65,12 @@ contract VaultBasicsTest is X402Base {
 
         // The implementation has no clone args, so it has no merchant and cannot be initialised by
         // anyone but the factory. Nothing about the live clone changes.
-        vm.expectRevert(IX402Vault.Unauthorized.selector);
-        IX402Vault(implementation).initPayout(payoutAddr);
+        vm.expectRevert(IX402PaymentRelayer.Unauthorized.selector);
+        IX402PaymentRelayer(implementation).initPayout(payoutAddr);
 
-        assertEq(X402Vault(vault).merchant(), merchant);
-        assertEq(X402Vault(vault).payout(), merchant);
-        assertEq(X402Vault(vault).nonce(), 0);
+        assertEq(X402PaymentRelayer(vault).merchant(), merchant);
+        assertEq(X402PaymentRelayer(vault).payout(), merchant);
+        assertEq(X402PaymentRelayer(vault).nonce(), 0);
     }
 
     function test_implementationHoldsNoFundsAndCannotBeSettled() public {
@@ -80,7 +80,7 @@ contract VaultBasicsTest is X402Base {
         // `merchant()` reads clone args that are not there, so the implementation's payout is not
         // the merchant's — and it holds nothing, so there is nothing to take either way.
         assertEq(token6.balanceOf(implementation), 0);
-        assertTrue(X402Vault(implementation).merchant() != merchant);
+        assertTrue(X402PaymentRelayer(implementation).merchant() != merchant);
     }
 
     function test_plainEthTransferToAVaultReverts() public {
@@ -96,11 +96,11 @@ contract VaultBasicsTest is X402Base {
         address vault2 = _deploy(merchant2, merchant2);
 
         vm.prank(address(factory));
-        X402Vault(vault).initPayout(payoutAddr);
+        X402PaymentRelayer(vault).initPayout(payoutAddr);
 
-        assertEq(X402Vault(vault).payout(), payoutAddr);
-        assertEq(X402Vault(vault2).payout(), merchant2);
-        assertEq(X402Vault(vault2).merchant(), merchant2);
+        assertEq(X402PaymentRelayer(vault).payout(), payoutAddr);
+        assertEq(X402PaymentRelayer(vault2).payout(), merchant2);
+        assertEq(X402PaymentRelayer(vault2).merchant(), merchant2);
     }
 
     // ------------------------------------------------------------ storage packing
@@ -114,7 +114,7 @@ contract VaultBasicsTest is X402Base {
         bytes memory sig = _sig(merchantPk, vault, payoutAddr, 0, deadline);
 
         vm.prank(merchant);
-        X402Vault(vault).changePayout(payoutAddr, deadline, sig);
+        X402PaymentRelayer(vault).changePayout(payoutAddr, deadline, sig);
 
         uint256 packed = uint256(vm.load(vault, bytes32(uint256(0))));
         // The truncation is the assertion: only the low 20 bytes carry the address.
@@ -123,8 +123,8 @@ contract VaultBasicsTest is X402Base {
         assertEq(packed >> 160, 1, "nonce is the next 12 bytes");
 
         // And the view functions agree with the raw slot.
-        assertEq(X402Vault(vault).payout(), payoutAddr);
-        assertEq(X402Vault(vault).nonce(), 1);
+        assertEq(X402PaymentRelayer(vault).payout(), payoutAddr);
+        assertEq(X402PaymentRelayer(vault).nonce(), 1);
         assertEq(uint256(vm.load(vault, bytes32(uint256(1)))), 0, "nothing else was written");
     }
 }

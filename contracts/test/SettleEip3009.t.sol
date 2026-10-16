@@ -2,8 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {X402Base} from "./utils/X402Base.sol";
-import {X402Vault} from "../src/X402Vault.sol";
-import {IX402Vault} from "../src/interfaces/IX402Vault.sol";
+import {X402PaymentRelayer} from "../src/X402PaymentRelayer.sol";
+import {IX402PaymentRelayer} from "../src/interfaces/IX402PaymentRelayer.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {
     BlacklistToken,
@@ -28,9 +28,9 @@ contract SettleEip3009Test is X402Base {
         token6.mint(payer, 1_000e6);
     }
 
-    function _settleAs(address caller, address token, IX402Vault.Eip3009Authorization memory auth) internal {
+    function _settleAs(address caller, address token, IX402PaymentRelayer.Eip3009Authorization memory auth) internal {
         vm.prank(caller);
-        X402Vault(vault).settle(token, auth);
+        X402PaymentRelayer(vault).settle(token, auth);
     }
 
     // -------------------------------------------------------------- happy path
@@ -56,10 +56,10 @@ contract SettleEip3009Test is X402Base {
         uint256 fee = _fee(address(token6));
 
         // The payer is unrelated to the merchant, so the only thing steering funds is `payout()`.
-        IX402Vault.Eip3009Authorization memory auth =
+        IX402PaymentRelayer.Eip3009Authorization memory auth =
             _auth3009(payerPk, address(token6), overrideVault, value, keccak256("override"));
         vm.prank(stranger);
-        X402Vault(overrideVault).settle(address(token6), auth);
+        X402PaymentRelayer(overrideVault).settle(address(token6), auth);
 
         assertEq(token6.balanceOf(payoutAddr), value - fee);
         assertEq(token6.balanceOf(merchant2), 0);
@@ -70,10 +70,10 @@ contract SettleEip3009Test is X402Base {
         uint256 value = 100e6;
         uint256 fee = _fee(address(token6));
         bytes32 authNonce = keccak256("pay");
-        IX402Vault.Eip3009Authorization memory auth = _auth3009(payerPk, address(token6), vault, value, authNonce);
+        IX402PaymentRelayer.Eip3009Authorization memory auth = _auth3009(payerPk, address(token6), vault, value, authNonce);
 
         vm.expectEmit(true, true, true, true, vault);
-        emit IX402Vault.Settle(merchant, address(token6), payer, value - fee, fee);
+        emit IX402PaymentRelayer.Settle(merchant, address(token6), payer, value - fee, fee);
 
         _settleAs(stranger, address(token6), auth);
     }
@@ -84,7 +84,7 @@ contract SettleEip3009Test is X402Base {
         // Four unrelated callers, four payments: the authorisation is the authority, not the caller.
         address[4] memory callers = [stranger, merchant, owner, operator];
         for (uint256 i; i < callers.length; ++i) {
-            IX402Vault.Eip3009Authorization memory auth =
+            IX402PaymentRelayer.Eip3009Authorization memory auth =
                 _auth3009(payerPk, address(token6), vault, value, keccak256(abi.encode("relay", i)));
             _settleAs(callers[i], address(token6), auth);
         }
@@ -106,9 +106,9 @@ contract SettleEip3009Test is X402Base {
     function test_settle_valueEqualToFeeRevertsAndLeavesTheAuthorizationUnconsumed() public {
         uint256 fee = _fee(address(token6));
         bytes32 authNonce = keccak256("at-fee");
-        IX402Vault.Eip3009Authorization memory auth = _auth3009(payerPk, address(token6), vault, fee, authNonce);
+        IX402PaymentRelayer.Eip3009Authorization memory auth = _auth3009(payerPk, address(token6), vault, fee, authNonce);
 
-        vm.expectRevert(IX402Vault.AmountBelowFee.selector);
+        vm.expectRevert(IX402PaymentRelayer.AmountBelowFee.selector);
         _settleAs(stranger, address(token6), auth);
 
         assertFalse(token6.authorizationState(payer, authNonce), "the nonce must still be spendable");
@@ -117,9 +117,9 @@ contract SettleEip3009Test is X402Base {
 
     function test_settle_valueBelowFeeRevertsAndLeavesTheAuthorizationUnconsumed() public {
         bytes32 authNonce = keccak256("below-fee");
-        IX402Vault.Eip3009Authorization memory auth = _auth3009(payerPk, address(token6), vault, 1, authNonce);
+        IX402PaymentRelayer.Eip3009Authorization memory auth = _auth3009(payerPk, address(token6), vault, 1, authNonce);
 
-        vm.expectRevert(IX402Vault.AmountBelowFee.selector);
+        vm.expectRevert(IX402PaymentRelayer.AmountBelowFee.selector);
         _settleAs(stranger, address(token6), auth);
 
         assertFalse(token6.authorizationState(payer, authNonce));
@@ -139,7 +139,7 @@ contract SettleEip3009Test is X402Base {
 
     function test_settle_expiredAuthorizationReverts() public {
         // forge-lint: disable-next-line(block-timestamp)
-        IX402Vault.Eip3009Authorization memory auth =
+        IX402PaymentRelayer.Eip3009Authorization memory auth =
             _auth3009(payerPk, address(token6), vault, 100e6, keccak256("expired"));
         auth.validBefore = block.timestamp;
 
@@ -149,7 +149,7 @@ contract SettleEip3009Test is X402Base {
 
     function test_settle_notYetValidAuthorizationReverts() public {
         // forge-lint: disable-next-line(block-timestamp)
-        IX402Vault.Eip3009Authorization memory auth =
+        IX402PaymentRelayer.Eip3009Authorization memory auth =
             _auth3009(payerPk, address(token6), vault, 100e6, keccak256("early"));
         auth.validAfter = block.timestamp + 1;
         auth = _sign3009(payerPk, address(token6), vault, auth);
@@ -161,7 +161,7 @@ contract SettleEip3009Test is X402Base {
     function test_settle_authorizationNamingAnotherRecipientReverts() public {
         // Signed to pay the merchant directly; the vault presents itself as the recipient, so the
         // digest the token rebuilds no longer matches what the payer signed.
-        IX402Vault.Eip3009Authorization memory auth =
+        IX402PaymentRelayer.Eip3009Authorization memory auth =
             _auth3009(payerPk, address(token6), merchant, 100e6, keccak256("wrong-to"));
 
         vm.expectRevert(bytes("invalid authorization signature"));
@@ -169,7 +169,7 @@ contract SettleEip3009Test is X402Base {
     }
 
     function test_settle_signatureFromSomeoneElseReverts() public {
-        IX402Vault.Eip3009Authorization memory auth =
+        IX402PaymentRelayer.Eip3009Authorization memory auth =
             _auth3009(payerPk, address(token6), vault, 100e6, keccak256("wrong-signer"));
         auth.from = stranger;
 
@@ -178,7 +178,7 @@ contract SettleEip3009Test is X402Base {
     }
 
     function test_settle_tamperedAmountReverts() public {
-        IX402Vault.Eip3009Authorization memory auth =
+        IX402PaymentRelayer.Eip3009Authorization memory auth =
             _auth3009(payerPk, address(token6), vault, 100e6, keccak256("tampered"));
         auth.value = 1_000e6; // signed for 100, presented as the whole balance
 
@@ -188,7 +188,7 @@ contract SettleEip3009Test is X402Base {
 
     function test_settle_reusedNonceReverts() public {
         bytes32 authNonce = keccak256("replay");
-        IX402Vault.Eip3009Authorization memory auth = _auth3009(payerPk, address(token6), vault, 100e6, authNonce);
+        IX402PaymentRelayer.Eip3009Authorization memory auth = _auth3009(payerPk, address(token6), vault, 100e6, authNonce);
 
         _settleAs(stranger, address(token6), auth);
 
@@ -197,7 +197,7 @@ contract SettleEip3009Test is X402Base {
     }
 
     function test_settle_insufficientPayerBalanceReverts() public {
-        IX402Vault.Eip3009Authorization memory auth =
+        IX402PaymentRelayer.Eip3009Authorization memory auth =
             _auth3009(payerPk, address(token6), vault, 5_000e6, keccak256("too-much"));
 
         vm.expectRevert();
@@ -208,7 +208,7 @@ contract SettleEip3009Test is X402Base {
 
     function test_settle_usesTheFeeInForceAtSettlementTimeNotAtSigningTime() public {
         bytes32 authNonce = keccak256("fee-moved");
-        IX402Vault.Eip3009Authorization memory auth = _auth3009(payerPk, address(token6), vault, 100e6, authNonce);
+        IX402PaymentRelayer.Eip3009Authorization memory auth = _auth3009(payerPk, address(token6), vault, 100e6, authNonce);
 
         // Signed under 10 bps, settled under 500 bps. The vault reads the factory at settle time, so
         // the payer's signature does not pin the price of the payment.
@@ -241,7 +241,7 @@ contract SettleEip3009Test is X402Base {
         blk.setBlacklisted(merchant, true);
 
         bytes32 authNonce = keccak256("blacklisted");
-        IX402Vault.Eip3009Authorization memory auth = _auth3009(payerPk, address(blk), vault, 100e18, authNonce);
+        IX402PaymentRelayer.Eip3009Authorization memory auth = _auth3009(payerPk, address(blk), vault, 100e18, authNonce);
 
         // Collection succeeds — the vault is not blacklisted — and the payout leg is what fails.
         // Solady collapses that into its own error, which is why the assertion names it.
@@ -259,7 +259,7 @@ contract SettleEip3009Test is X402Base {
         _configure(address(t), DEFAULT_BPS);
         t.mint(payer, 100e18);
 
-        IX402Vault.Eip3009Authorization memory auth =
+        IX402PaymentRelayer.Eip3009Authorization memory auth =
             _auth3009(payerPk, address(t), vault, 100e18, keccak256("false-payout"));
 
         vm.expectRevert(SafeTransferLib.TransferFailed.selector);
@@ -271,7 +271,7 @@ contract SettleEip3009Test is X402Base {
         _configure(address(t), DEFAULT_BPS);
         t.mint(payer, 100e18);
 
-        IX402Vault.Eip3009Authorization memory auth =
+        IX402PaymentRelayer.Eip3009Authorization memory auth =
             _auth3009(payerPk, address(t), vault, 100e18, keccak256("reverting-payout"));
 
         vm.expectRevert(SafeTransferLib.TransferFailed.selector);
@@ -286,7 +286,7 @@ contract SettleEip3009Test is X402Base {
         t.mint(payer, 100e18);
 
         bytes32 authNonce = keccak256("fee-on-transfer");
-        IX402Vault.Eip3009Authorization memory auth = _auth3009(payerPk, address(t), vault, 100e18, authNonce);
+        IX402PaymentRelayer.Eip3009Authorization memory auth = _auth3009(payerPk, address(t), vault, 100e18, authNonce);
 
         vm.expectRevert();
         _settleAs(stranger, address(t), auth);
@@ -304,7 +304,7 @@ contract SettleEip3009Test is X402Base {
         usdt.mint(payer, 1_000e6);
 
         uint256 fee = _fee(address(usdt));
-        IX402Vault.Eip3009Authorization memory auth = _auth3009(payerPk, address(usdt), vault, 100e6, keccak256("usdt"));
+        IX402PaymentRelayer.Eip3009Authorization memory auth = _auth3009(payerPk, address(usdt), vault, 100e6, keccak256("usdt"));
 
         _settleAs(stranger, address(usdt), auth);
 

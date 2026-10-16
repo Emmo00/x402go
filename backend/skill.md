@@ -455,7 +455,7 @@ PUT /payout   → { "payTo": "0x4f3Edf983aC636A65A842Ce7c78D9Aa706D3b113" }
 `PUT /payout` records an address. It does **not** move the on-chain payout by
 itself, and it requires a signed-in session, not an API key.
 
-The on-chain change goes through `X402Vault.changePayout`, which requires an
+The on-chain change goes through `X402PaymentRelayer.changePayout`, which requires an
 EIP-712 signature from the **vault's merchant**, not from the payout address and
 not from the x402Go operator. The operator can never redirect merchant funds.
 
@@ -469,7 +469,7 @@ it, so the payout is safe from the moment the vault exists.
 ### Withdrawal flow
 
 Withdrawal is an **operator action on the vault contract**, not a public HTTP
-endpoint. `X402Vault.withdraw` is callable only by the factory's operator:
+endpoint. `X402PaymentRelayer.withdraw` is callable only by the factory's operator:
 
 ```solidity
 function withdraw(

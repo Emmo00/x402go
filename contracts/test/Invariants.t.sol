@@ -3,9 +3,9 @@ pragma solidity ^0.8.24;
 
 import {X402Base} from "./utils/X402Base.sol";
 import {X402Signing} from "./utils/X402Signing.sol";
-import {X402Vault} from "../src/X402Vault.sol";
-import {X402VaultFactory} from "../src/X402VaultFactory.sol";
-import {IX402Vault} from "../src/interfaces/IX402Vault.sol";
+import {X402PaymentRelayer} from "../src/X402PaymentRelayer.sol";
+import {X402PaymentRelayerFactory} from "../src/X402PaymentRelayerFactory.sol";
+import {IX402PaymentRelayer} from "../src/interfaces/IX402PaymentRelayer.sol";
 import {IPermit2} from "../src/interfaces/IPermit2.sol";
 import {IX402ExactPermit2Proxy} from "../src/interfaces/IX402ExactPermit2Proxy.sol";
 import {MockERC20} from "./utils/Mocks.sol";
@@ -13,7 +13,7 @@ import {MockERC20} from "./utils/Mocks.sol";
 /// @dev Everything the handler needs to build its own world. A struct rather than a dozen
 /// positional arguments: the legacy codegen runs out of stack long before this.
 struct VaultHandlerConfig {
-    X402VaultFactory factory;
+    X402PaymentRelayerFactory factory;
     MockERC20 token;
     address owner;
     address operator;
@@ -36,7 +36,7 @@ struct VaultHandlerConfig {
 /// one of the tracked holders. That is what makes the conservation invariant meaningful rather than
 /// a restatement of ERC20's own supply accounting.
 contract VaultInvariantHandler is X402Signing {
-    X402VaultFactory internal immutable factory;
+    X402PaymentRelayerFactory internal immutable factory;
     MockERC20 internal immutable token;
     address internal immutable owner;
     address internal immutable operator;
@@ -143,7 +143,7 @@ contract VaultInvariantHandler is X402Signing {
         token.mint(vault, amount);
         ghostMinted += amount;
 
-        X402Vault(vault).rescue(address(token));
+        X402PaymentRelayer(vault).rescue(address(token));
 
         ghostFeesCharged += fee;
     }
@@ -156,11 +156,11 @@ contract VaultInvariantHandler is X402Signing {
 
         uint256 deadline = _deadline();
         // Read the nonce before signing: the handler must sign whatever the vault is currently on.
-        uint256 n = X402Vault(vault).nonce();
+        uint256 n = X402PaymentRelayer(vault).nonce();
         bytes memory sig = _sig(merchantPks[i], vault, newPayout, n, deadline);
 
         // Permissionless: the signature is the authority.
-        X402Vault(vault).changePayout(newPayout, deadline, sig);
+        X402PaymentRelayer(vault).changePayout(newPayout, deadline, sig);
     }
 
     function rotateFees(uint16 bps) external {
@@ -197,11 +197,11 @@ contract VaultInvariantHandler is X402Signing {
             // whole sequence, so a revert here would be a real finding and not a replay.
             (IPermit2.PermitTransferFrom memory permit, IX402ExactPermit2Proxy.Witness memory wit, bytes memory sig) =
                 _permit2Args(payerPk, vault, address(token), value, nonceCounter);
-            X402Vault(vault).settleWithPermit2(permit, payer, wit, sig);
+            X402PaymentRelayer(vault).settleWithPermit2(permit, payer, wit, sig);
         } else {
-            IX402Vault.Eip3009Authorization memory auth =
+            IX402PaymentRelayer.Eip3009Authorization memory auth =
                 _auth3009(payerPk, address(token), vault, value, bytes32(nonceCounter));
-            X402Vault(vault).settle(address(token), auth);
+            X402PaymentRelayer(vault).settle(address(token), auth);
         }
 
         ghostFeesCharged += fee;
@@ -282,7 +282,7 @@ contract InvariantsTest is X402Base {
 
             assertEq(token18.balanceOf(vault), 0, "a vault was left holding tokens");
 
-            X402Vault v = X402Vault(vault);
+            X402PaymentRelayer v = X402PaymentRelayer(vault);
             assertTrue(v.payout() != address(0), "payout fell through to zero");
             assertEq(v.merchant(), handler.activeMerchant(i), "the merchant changed");
             assertLe(v.nonce(), 1_000_000, "the nonce ran away");

@@ -2,19 +2,19 @@
 pragma solidity ^0.8.24;
 
 import {Script, console2} from "forge-std/Script.sol";
-import {X402VaultFactory} from "../src/X402VaultFactory.sol";
+import {X402PaymentRelayerFactory} from "../src/X402PaymentRelayerFactory.sol";
 
-contract DeployX402VaultFactory is Script {
+contract DeployX402PaymentRelayerFactory is Script {
     // Bump the version string only if you intentionally want a new address.
-    bytes32 internal constant SALT = keccak256("x402go.X402VaultFactory.v1");
+    bytes32 internal constant SALT = keccak256("x402go.X402PaymentRelayerFactory.v1");
 
-    function run() external returns (X402VaultFactory factory) {
+    function run() external returns (X402PaymentRelayerFactory factory) {
         // Require explicit values: constructor args are part of the address, and a
         // silent default (deployer, address(0)) would give a different address per chain.
         address owner = vm.envAddress("OWNER");
         address operator = vm.envAddress("OPERATOR");
 
-        bytes memory initCode = abi.encodePacked(type(X402VaultFactory).creationCode, abi.encode(owner, operator));
+        bytes memory initCode = abi.encodePacked(type(X402PaymentRelayerFactory).creationCode, abi.encode(owner, operator));
         address predicted = vm.computeCreate2Address(SALT, keccak256(initCode), CREATE2_FACTORY);
 
         console2.log("Chain ID:         ", block.chainid);
@@ -23,17 +23,17 @@ contract DeployX402VaultFactory is Script {
         // Re-running on a chain where it's already deployed would revert, so skip cleanly.
         if (predicted.code.length != 0) {
             console2.log("Already deployed, skipping.");
-            factory = X402VaultFactory(predicted);
+            factory = X402PaymentRelayerFactory(predicted);
         } else {
             vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-            factory = new X402VaultFactory{salt: SALT}(owner, operator);
+            factory = new X402PaymentRelayerFactory{salt: SALT}(owner, operator);
             vm.stopBroadcast();
 
             require(address(factory) == predicted, "address mismatch");
         }
 
-        console2.log("X402VaultFactory: ", address(factory));
-        console2.log("X402Vault (impl): ", factory.implementation());
+        console2.log("X402PaymentRelayerFactory: ", address(factory));
+        console2.log("X402PaymentRelayer (impl): ", factory.implementation());
         console2.log("Owner:            ", factory.owner());
         // Roles, not a single operator: `setOperator`/`operator()` no longer exist.
         console2.log("Operator roles:   ", factory.rolesOf(operator));
@@ -48,7 +48,7 @@ contract DeployX402VaultFactory is Script {
     /// This is not cosmetic. A freshly deployed factory has `tokenFeeBPS == 0` for every token, and
     /// `settle`/`settleWithPermit2` deliberately refuse an unconfigured token — so a factory that
     /// ships without this step reverts `TokenNotSupported` on every payment.
-    function _seedFees(X402VaultFactory factory) internal {
+    function _seedFees(X402PaymentRelayerFactory factory) internal {
         address[] memory tokens = vm.envOr("FEE_TOKENS", ",", new address[](0));
         string[] memory bpsStrings = vm.envOr("FEE_BPS", ",", new string[](0));
 

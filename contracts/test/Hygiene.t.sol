@@ -2,8 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {X402Base} from "./utils/X402Base.sol";
-import {X402Vault} from "../src/X402Vault.sol";
-import {IX402Vault} from "../src/interfaces/IX402Vault.sol";
+import {X402PaymentRelayer} from "../src/X402PaymentRelayer.sol";
+import {IX402PaymentRelayer} from "../src/interfaces/IX402PaymentRelayer.sol";
 import {IERC3009} from "../src/interfaces/IERC3009.sol";
 
 /// @dev Suite N — hygiene.
@@ -80,9 +80,9 @@ contract HygieneTest is X402Base {
         assertEq(bytes4(keccak256("changePayout(address,uint256,bytes)")), SELECTOR_CHANGE_PAYOUT);
         assertEq(bytes4(keccak256("rescue(address)")), SELECTOR_RESCUE);
 
-        assertEq(IX402Vault.settle.selector, SELECTOR_SETTLE);
-        assertEq(IX402Vault.settleWithPermit2.selector, SELECTOR_SETTLE_PERMIT2);
-        assertEq(IX402Vault.changePayout.selector, SELECTOR_CHANGE_PAYOUT);
+        assertEq(IX402PaymentRelayer.settle.selector, SELECTOR_SETTLE);
+        assertEq(IX402PaymentRelayer.settleWithPermit2.selector, SELECTOR_SETTLE_PERMIT2);
+        assertEq(IX402PaymentRelayer.changePayout.selector, SELECTOR_CHANGE_PAYOUT);
     }
 
     function test_factorySelectorsArePinned() public pure {
@@ -124,15 +124,15 @@ contract HygieneTest is X402Base {
     }
 
     function test_theVaultExposesRescueEvenThoughTheInterfaceDoesNot() public {
-        // Worth pinning: `rescue` is implemented and callable, but `IX402Vault` does not declare it,
+        // Worth pinning: `rescue` is implemented and callable, but `IX402PaymentRelayer` does not declare it,
         // so anything integrating through the interface cannot reach it. Recorded rather than
         // quietly "fixed" — the interface is part of the published ABI.
         address vault = _openVault();
 
         // An empty, unconfigured vault: the call reaches the body (so the selector is live) and
         // fails on `bal <= fee`.
-        vm.expectRevert(IX402Vault.AmountBelowFee.selector);
-        X402Vault(vault).rescue(address(token6));
+        vm.expectRevert(IX402PaymentRelayer.AmountBelowFee.selector);
+        X402PaymentRelayer(vault).rescue(address(token6));
 
         assertTrue(_codeContains(factory.implementation(), SELECTOR_RESCUE), "rescue is present in the code");
     }
@@ -182,7 +182,7 @@ contract HygieneTest is X402Base {
 
         uint256 before = gasleft();
         vm.prank(stranger);
-        X402Vault(vault).rescue(address(token6));
+        X402PaymentRelayer(vault).rescue(address(token6));
         uint256 used = before - gasleft();
 
         assertLt(used, 300_000, "rescue got dramatically more expensive");
@@ -195,7 +195,7 @@ contract HygieneTest is X402Base {
 
         uint256 before = gasleft();
         vm.prank(stranger);
-        X402Vault(vault).changePayout(payoutAddr, deadline, sig);
+        X402PaymentRelayer(vault).changePayout(payoutAddr, deadline, sig);
         uint256 used = before - gasleft();
 
         assertLt(used, 300_000, "changePayout got dramatically more expensive");

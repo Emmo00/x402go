@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 
-import {IX402Vault} from "../../src/interfaces/IX402Vault.sol";
+import {IX402PaymentRelayer} from "../../src/interfaces/IX402PaymentRelayer.sol";
 import {IPermit2} from "../../src/interfaces/IPermit2.sol";
 import {IX402ExactPermit2Proxy} from "../../src/interfaces/IX402ExactPermit2Proxy.sol";
 
@@ -48,7 +48,7 @@ abstract contract X402Signing is Test {
 
     function _domainSeparator(address vault_) internal view returns (bytes32) {
         return
-            keccak256(abi.encode(EIP712_DOMAIN_TYPEHASH, keccak256("X402Vault"), keccak256("1"), block.chainid, vault_));
+            keccak256(abi.encode(EIP712_DOMAIN_TYPEHASH, keccak256("X402PaymentRelayer"), keccak256("1"), block.chainid, vault_));
     }
 
     function _digest(address vault_, address newPayout, uint256 nonce, uint256 deadline)
@@ -120,7 +120,7 @@ abstract contract X402Signing is Test {
         bytes32 tokenDomainSeparator,
         bytes32 typehash,
         address to,
-        IX402Vault.Eip3009Authorization memory auth
+        IX402PaymentRelayer.Eip3009Authorization memory auth
     ) internal pure returns (bytes32) {
         return keccak256(
             abi.encodePacked(
@@ -136,7 +136,7 @@ abstract contract X402Signing is Test {
     /// @dev Reads the domain and the type hash off the token rather than restating them, so the
     /// helper cannot drift from the token it signs for. A suite pins the token's own type hash
     /// against the standard string, and Suite M pins the domain against a real deployment.
-    function _tokenDigest(address tokenContract, address to, IX402Vault.Eip3009Authorization memory auth)
+    function _tokenDigest(address tokenContract, address to, IX402PaymentRelayer.Eip3009Authorization memory auth)
         internal
         view
         returns (bytes32)
@@ -152,10 +152,10 @@ abstract contract X402Signing is Test {
     /// @dev Signs an already-populated authorization. Split out from {_auth3009} so a negative case
     /// can vary the window or the recipient without a second helper carrying eight parameters —
     /// the legacy codegen has a sixteen-slot stack and `vm.sign` is expensive in slots.
-    function _sign3009(uint256 pk, address tokenContract, address to, IX402Vault.Eip3009Authorization memory auth)
+    function _sign3009(uint256 pk, address tokenContract, address to, IX402PaymentRelayer.Eip3009Authorization memory auth)
         internal
         view
-        returns (IX402Vault.Eip3009Authorization memory)
+        returns (IX402PaymentRelayer.Eip3009Authorization memory)
     {
         {
             (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, _tokenDigest(tokenContract, to, auth));
@@ -174,8 +174,8 @@ abstract contract X402Signing is Test {
         bytes32 tokenDomainSeparator,
         bytes32 typehash,
         address to,
-        IX402Vault.Eip3009Authorization memory auth
-    ) internal pure returns (IX402Vault.Eip3009Authorization memory) {
+        IX402PaymentRelayer.Eip3009Authorization memory auth
+    ) internal pure returns (IX402PaymentRelayer.Eip3009Authorization memory) {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, _tokenDigestWithDomain(tokenDomainSeparator, typehash, to, auth));
 
         auth.v = v;
@@ -189,7 +189,7 @@ abstract contract X402Signing is Test {
     function _auth3009(uint256 pk, address tokenContract, address to, uint256 value, bytes32 authNonce)
         internal
         view
-        returns (IX402Vault.Eip3009Authorization memory auth)
+        returns (IX402PaymentRelayer.Eip3009Authorization memory auth)
     {
         auth.from = vm.addr(pk);
         auth.value = value;
@@ -208,7 +208,7 @@ abstract contract X402Signing is Test {
         address to,
         uint256 value,
         bytes32 authNonce
-    ) internal view returns (IX402Vault.Eip3009Authorization memory auth) {
+    ) internal view returns (IX402PaymentRelayer.Eip3009Authorization memory auth) {
         auth.from = vm.addr(pk);
         auth.value = value;
         auth.validAfter = 0;

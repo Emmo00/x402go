@@ -2,8 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {X402Base} from "./utils/X402Base.sol";
-import {X402Vault} from "../src/X402Vault.sol";
-import {IX402Vault} from "../src/interfaces/IX402Vault.sol";
+import {X402PaymentRelayer} from "../src/X402PaymentRelayer.sol";
+import {IX402PaymentRelayer} from "../src/interfaces/IX402PaymentRelayer.sol";
 import {IPermit2} from "../src/interfaces/IPermit2.sol";
 import {IX402ExactPermit2Proxy} from "../src/interfaces/IX402ExactPermit2Proxy.sol";
 import {MockERC20, MockX402ExactPermit2Proxy, PERMIT2_ADDR, X402_PROXY_ADDR} from "./utils/Mocks.sol";
@@ -24,7 +24,7 @@ contract RescueTest is X402Base {
 
     function _rescueAs(address caller, address token) internal {
         vm.prank(caller);
-        X402Vault(vault).rescue(token);
+        X402PaymentRelayer(vault).rescue(token);
     }
 
     // ---------------------------------------------------------------- recovery
@@ -52,7 +52,7 @@ contract RescueTest is X402Base {
         assertEq(deployed, predicted);
 
         vm.prank(stranger);
-        X402Vault(deployed).rescue(address(token6));
+        X402PaymentRelayer(deployed).rescue(address(token6));
 
         uint256 fee = _fee(address(token6));
         assertEq(token6.balanceOf(merchant2), 50e6 - fee);
@@ -67,7 +67,7 @@ contract RescueTest is X402Base {
         uint256 fee = _fee(address(token6));
 
         vm.prank(stranger);
-        X402Vault(overrideVault).rescue(address(token6));
+        X402PaymentRelayer(overrideVault).rescue(address(token6));
 
         assertEq(token6.balanceOf(payoutAddr), 100e6 - fee);
         assertEq(token6.balanceOf(merchant2), 0);
@@ -79,7 +79,7 @@ contract RescueTest is X402Base {
         uint256 deadline = _deadline();
         bytes memory sig = _sig(merchantPk, vault, payoutAddr, 0, deadline);
         vm.prank(merchant);
-        X402Vault(vault).changePayout(payoutAddr, deadline, sig);
+        X402PaymentRelayer(vault).changePayout(payoutAddr, deadline, sig);
 
         _rescueAs(stranger, address(token6));
 
@@ -97,7 +97,7 @@ contract RescueTest is X402Base {
         uint256 value = 100e6;
         uint256 fee = _fee(address(token6));
 
-        IX402Vault.Eip3009Authorization memory auth =
+        IX402PaymentRelayer.Eip3009Authorization memory auth =
             _auth3009(payerPk, address(token6), vault, value, keccak256("front-run"));
 
         token6.transferWithAuthorization(
@@ -143,7 +143,7 @@ contract RescueTest is X402Base {
         uint256 fee = _fee(address(token6));
 
         vm.prank(owner);
-        X402Vault(vault).rescue(address(token6));
+        X402PaymentRelayer(vault).rescue(address(token6));
 
         assertEq(token6.balanceOf(payoutAddr), 0);
         assertEq(token6.balanceOf(owner), 0);
@@ -189,21 +189,21 @@ contract RescueTest is X402Base {
     // ---------------------------------------------------------------- boundaries
 
     function test_rescue_revertsOnAZeroBalance() public {
-        vm.expectRevert(IX402Vault.AmountBelowFee.selector);
+        vm.expectRevert(IX402PaymentRelayer.AmountBelowFee.selector);
         _rescueAs(stranger, address(token6));
     }
 
     function test_rescue_revertsWhenTheBalanceEqualsTheFee() public {
         token6.mint(vault, _fee(address(token6)));
 
-        vm.expectRevert(IX402Vault.AmountBelowFee.selector);
+        vm.expectRevert(IX402PaymentRelayer.AmountBelowFee.selector);
         _rescueAs(stranger, address(token6));
     }
 
     function test_rescue_revertsWhenTheBalanceIsBelowTheFee() public {
         token6.mint(vault, _fee(address(token6)) - 1);
 
-        vm.expectRevert(IX402Vault.AmountBelowFee.selector);
+        vm.expectRevert(IX402PaymentRelayer.AmountBelowFee.selector);
         _rescueAs(stranger, address(token6));
     }
 
@@ -233,7 +233,7 @@ contract RescueTest is X402Base {
 
         _rescueAs(stranger, address(token6));
 
-        vm.expectRevert(IX402Vault.AmountBelowFee.selector);
+        vm.expectRevert(IX402PaymentRelayer.AmountBelowFee.selector);
         _rescueAs(owner, address(token6));
     }
 
@@ -246,7 +246,7 @@ contract RescueTest is X402Base {
         // There is no payer: nobody was authorised, the tokens simply arrived. The event still
         // claims the `Settle` shape, which is why the payer topic is zero here.
         vm.expectEmit(true, true, true, true, vault);
-        emit IX402Vault.Settle(merchant, address(token6), address(0), 100e6 - fee, fee);
+        emit IX402PaymentRelayer.Settle(merchant, address(token6), address(0), 100e6 - fee, fee);
 
         _rescueAs(stranger, address(token6));
     }
@@ -260,8 +260,8 @@ contract RescueTest is X402Base {
         _rescueAs(stranger, address(token6));
 
         assertEq(uint256(vm.load(vault, bytes32(uint256(0)))), slot0Before);
-        assertEq(X402Vault(vault).payout(), merchant);
-        assertEq(X402Vault(vault).nonce(), 0);
+        assertEq(X402PaymentRelayer(vault).payout(), merchant);
+        assertEq(X402PaymentRelayer(vault).nonce(), 0);
     }
 
     function test_rescue_doesNotInterfereWithALaterSettlement() public {

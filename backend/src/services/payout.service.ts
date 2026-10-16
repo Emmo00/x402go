@@ -18,7 +18,7 @@ export type IPayoutOutcome =
  * read costs nothing extra.
  *
  * NOTE: this records an address and nothing else. On chain, moving a payout
- * goes through `X402Vault.changePayout`, which verifies an EIP-712
+ * goes through `X402PaymentRelayer.changePayout`, which verifies an EIP-712
  * `ChangePayout(address newPayout,uint256 nonce,uint256 deadline)` signature
  * from the vault's merchant before any funds follow it. That check does not
  * exist yet, so what is stored here is a preference, not an authority, and

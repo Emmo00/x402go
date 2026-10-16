@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IX402Vault} from "../../src/interfaces/IX402Vault.sol";
+import {IX402PaymentRelayer} from "../../src/interfaces/IX402PaymentRelayer.sol";
 import {IPermit2} from "../../src/interfaces/IPermit2.sol";
 import {IX402ExactPermit2Proxy} from "../../src/interfaces/IX402ExactPermit2Proxy.sol";
-import {X402Vault} from "../../src/X402Vault.sol";
-import {X402VaultFactory} from "../../src/X402VaultFactory.sol";
+import {X402PaymentRelayer} from "../../src/X402PaymentRelayer.sol";
+import {X402PaymentRelayerFactory} from "../../src/X402PaymentRelayerFactory.sol";
 
 import {MockERC20, PERMIT2_ADDR, X402_PROXY_ADDR} from "./Mocks.sol";
 import {X402Signing} from "./X402Signing.sol";
@@ -17,7 +17,7 @@ abstract contract X402Base is X402Signing {
     /// token's is 1e15, both comfortably non-zero.
     uint16 internal constant DEFAULT_BPS = 10;
 
-    X402VaultFactory internal factory;
+    X402PaymentRelayerFactory internal factory;
 
     /// @dev Cached because `factory.OPERATOR_ROLE()` is an external call, and an external call in
     /// argument position consumes a pending `vm.prank`/`vm.expectRevert` before the call under test
@@ -55,7 +55,7 @@ abstract contract X402Base is X402Signing {
         payerPk = 0xB0B;
         payer = vm.addr(payerPk);
 
-        factory = new X402VaultFactory(owner, operator);
+        factory = new X402PaymentRelayerFactory(owner, operator);
         operatorRole = factory.OPERATOR_ROLE();
 
         token6 = new MockERC20("USD Coin", "USDC", 6);
@@ -104,10 +104,10 @@ abstract contract X402Base is X402Signing {
     /// @dev Settles one EIP-3009 payment, always relayed by `stranger`. A test that used a
     /// privileged caller here would stop proving that `settle` is permissionless.
     function _pay3009(uint256 pk, address vaultAddr, address tokenContract, uint256 value, bytes32 authNonce) internal {
-        IX402Vault.Eip3009Authorization memory auth = _auth3009(pk, tokenContract, vaultAddr, value, authNonce);
+        IX402PaymentRelayer.Eip3009Authorization memory auth = _auth3009(pk, tokenContract, vaultAddr, value, authNonce);
 
         vm.prank(stranger);
-        X402Vault(vaultAddr).settle(tokenContract, auth);
+        X402PaymentRelayer(vaultAddr).settle(tokenContract, auth);
     }
 
     /// @dev Settles one Permit2 payment through the proxy, also relayed by `stranger`.
@@ -120,6 +120,6 @@ abstract contract X402Base is X402Signing {
         bytes memory signature = _signPermit2(pk, PERMIT2_ADDR, X402_PROXY_ADDR, permit, wit);
 
         vm.prank(stranger);
-        X402Vault(vaultAddr).settleWithPermit2(permit, payerAddr, wit, signature);
+        X402PaymentRelayer(vaultAddr).settleWithPermit2(permit, payerAddr, wit, signature);
     }
 }

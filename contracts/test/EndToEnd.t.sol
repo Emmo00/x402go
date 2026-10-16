@@ -2,8 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {X402Base} from "./utils/X402Base.sol";
-import {X402Vault} from "../src/X402Vault.sol";
-import {IX402Vault} from "../src/interfaces/IX402Vault.sol";
+import {X402PaymentRelayer} from "../src/X402PaymentRelayer.sol";
+import {IX402PaymentRelayer} from "../src/interfaces/IX402PaymentRelayer.sol";
 import {MockERC20, Mock1271Wallet} from "./utils/Mocks.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 
@@ -28,15 +28,15 @@ contract EndToEndTest is X402Base {
 
         // 1. The operator onboards the merchant with a platform-managed payout.
         address vault = _deploy(merchant, payoutAddr);
-        assertEq(X402Vault(vault).merchant(), merchant);
-        assertEq(X402Vault(vault).payout(), payoutAddr);
+        assertEq(X402PaymentRelayer(vault).merchant(), merchant);
+        assertEq(X402PaymentRelayer(vault).payout(), payoutAddr);
 
         // 2. The merchant signs their payout over to themselves.
         uint256 deadline = _deadline();
         bytes memory sig = _sig(merchantPk, vault, merchant, 0, deadline);
         vm.prank(stranger);
-        X402Vault(vault).changePayout(merchant, deadline, sig);
-        assertEq(X402Vault(vault).payout(), merchant);
+        X402PaymentRelayer(vault).changePayout(merchant, deadline, sig);
+        assertEq(X402PaymentRelayer(vault).payout(), merchant);
 
         // 3. Two payments, one per scheme.
         _legs(vault, 100e6, 200e6);
@@ -44,7 +44,7 @@ contract EndToEndTest is X402Base {
         // 4. A stray balance arrives — a misconfigured payTo — and is recovered.
         token6.mint(vault, 5e6);
         vm.prank(stranger);
-        X402Vault(vault).rescue(address(token6));
+        X402PaymentRelayer(vault).rescue(address(token6));
 
         // 5. The owner sweeps the fees.
         vm.prank(owner);
@@ -63,7 +63,7 @@ contract EndToEndTest is X402Base {
         _configure(address(token6), DEFAULT_BPS);
 
         address vault = _deployAs(merchant, merchant, merchant);
-        assertEq(X402Vault(vault).payout(), merchant);
+        assertEq(X402PaymentRelayer(vault).payout(), merchant);
 
         token6.mint(payer, 100e6);
         _pay3009(payerPk, vault, address(token6), 100e6, keccak256("self"));
@@ -167,8 +167,8 @@ contract EndToEndTest is X402Base {
         wallet.approve(_digest(walletVault, payoutAddr, 0, deadline));
 
         vm.prank(stranger);
-        X402Vault(walletVault).changePayout(payoutAddr, deadline, hex"");
-        assertEq(X402Vault(walletVault).payout(), payoutAddr);
+        X402PaymentRelayer(walletVault).changePayout(payoutAddr, deadline, hex"");
+        assertEq(X402PaymentRelayer(walletVault).payout(), payoutAddr);
 
         token6.mint(payer, 100e6);
         _pay3009(payerPk, walletVault, address(token6), 100e6, keccak256("contract-merchant"));
@@ -186,7 +186,7 @@ contract EndToEndTest is X402Base {
         token6.mint(payer, 100e6);
 
         // The bypass: pay the token directly, so `settle` never runs and no `Settle` is emitted.
-        IX402Vault.Eip3009Authorization memory auth =
+        IX402PaymentRelayer.Eip3009Authorization memory auth =
             _auth3009(payerPk, address(token6), vault, 100e6, keccak256("bypass"));
         token6.transferWithAuthorization(
             auth.from, vault, auth.value, auth.validAfter, auth.validBefore, auth.nonce, auth.v, auth.r, auth.s
@@ -194,7 +194,7 @@ contract EndToEndTest is X402Base {
 
         // Recovery puts the accounting back where it would have been.
         vm.prank(stranger);
-        X402Vault(vault).rescue(address(token6));
+        X402PaymentRelayer(vault).rescue(address(token6));
 
         uint256 fee = _fee(address(token6));
         assertEq(token6.balanceOf(merchant), 100e6 - fee);
@@ -212,18 +212,18 @@ contract EndToEndTest is X402Base {
 
         // Built before the cheatcodes are armed: `_auth3009` reads the token's domain separator, and
         // an external call in argument position would consume the pending `expectRevert`/`prank`.
-        IX402Vault.Eip3009Authorization memory unsupported =
+        IX402PaymentRelayer.Eip3009Authorization memory unsupported =
             _auth3009(payerPk, address(third), vault, 100e8, keccak256("x"));
 
-        vm.expectRevert(IX402Vault.TokenNotSupported.selector);
+        vm.expectRevert(IX402PaymentRelayer.TokenNotSupported.selector);
         vm.prank(stranger);
-        X402Vault(vault).settle(address(third), unsupported);
+        X402PaymentRelayer(vault).settle(address(third), unsupported);
 
         _configure(address(third), 100);
 
-        IX402Vault.Eip3009Authorization memory auth = _auth3009(payerPk, address(third), vault, 100e8, keccak256("y"));
+        IX402PaymentRelayer.Eip3009Authorization memory auth = _auth3009(payerPk, address(third), vault, 100e8, keccak256("y"));
         vm.prank(stranger);
-        X402Vault(vault).settle(address(third), auth);
+        X402PaymentRelayer(vault).settle(address(third), auth);
 
         uint256 fee = _fee(address(third));
         assertEq(fee, 1e6, "1% of 1e8 units");

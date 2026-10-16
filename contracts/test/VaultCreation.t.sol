@@ -2,8 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {X402Base} from "./utils/X402Base.sol";
-import {X402Vault} from "../src/X402Vault.sol";
-import {IX402VaultFactory} from "../src/interfaces/IX402VaultFactory.sol";
+import {X402PaymentRelayer} from "../src/X402PaymentRelayer.sol";
+import {IX402PaymentRelayerFactory} from "../src/interfaces/IX402PaymentRelayerFactory.sol";
 
 /// @dev Suite C — vault creation, deterministic addressing and the payout override.
 contract VaultCreationTest is X402Base {
@@ -23,13 +23,13 @@ contract VaultCreationTest is X402Base {
 
     function test_cloneArgCarriesTheMerchant() public {
         address vault = _deploy(merchant, merchant);
-        assertEq(X402Vault(vault).merchant(), merchant);
+        assertEq(X402PaymentRelayer(vault).merchant(), merchant);
     }
 
     function test_secondCreateForTheSameMerchantReverts() public {
         _deploy(merchant, merchant);
 
-        vm.expectRevert(IX402VaultFactory.VaultExists.selector);
+        vm.expectRevert(IX402PaymentRelayerFactory.VaultExists.selector);
         vm.prank(operator);
         factory.createVault(merchant, merchant);
     }
@@ -40,7 +40,7 @@ contract VaultCreationTest is X402Base {
         vm.prank(owner);
         factory.grantRoles(operator2, operatorRole);
 
-        vm.expectRevert(IX402VaultFactory.VaultExists.selector);
+        vm.expectRevert(IX402PaymentRelayerFactory.VaultExists.selector);
         vm.prank(operator2);
         factory.createVault(merchant, payoutAddr);
     }
@@ -48,7 +48,7 @@ contract VaultCreationTest is X402Base {
     function test_secondCreateRevertsEvenForTheMerchantThemselves() public {
         _deploy(merchant, merchant);
 
-        vm.expectRevert(IX402VaultFactory.VaultExists.selector);
+        vm.expectRevert(IX402PaymentRelayerFactory.VaultExists.selector);
         vm.prank(merchant);
         factory.createVault(merchant, merchant);
     }
@@ -59,7 +59,7 @@ contract VaultCreationTest is X402Base {
         address predicted = factory.vaultOf(merchant);
         vm.etch(predicted, hex"00");
 
-        vm.expectRevert(IX402VaultFactory.VaultExists.selector);
+        vm.expectRevert(IX402PaymentRelayerFactory.VaultExists.selector);
         vm.prank(operator);
         factory.createVault(merchant, merchant);
     }
@@ -67,14 +67,14 @@ contract VaultCreationTest is X402Base {
     function test_payoutOverrideIsInstalled() public {
         address vault = _deploy(merchant, payoutAddr);
 
-        assertEq(X402Vault(vault).payout(), payoutAddr);
-        assertEq(X402Vault(vault).merchant(), merchant);
+        assertEq(X402PaymentRelayer(vault).payout(), payoutAddr);
+        assertEq(X402PaymentRelayer(vault).merchant(), merchant);
     }
 
     function test_payoutEqualToMerchantLeavesTheSlotUnset() public {
         address vault = _deploy(merchant, merchant);
 
-        assertEq(X402Vault(vault).payout(), merchant);
+        assertEq(X402PaymentRelayer(vault).payout(), merchant);
         // Not merely "payout() returns the merchant": the override slot really is untouched, which
         // is what lets `payout()` fall through to `merchant()`.
         assertEq(uint256(vm.load(vault, bytes32(uint256(0)))), 0);
@@ -84,7 +84,7 @@ contract VaultCreationTest is X402Base {
         address predicted = factory.vaultOf(merchant);
 
         vm.expectEmit(true, true, false, true, address(factory));
-        emit IX402VaultFactory.VaultCreated(merchant, predicted, payoutAddr);
+        emit IX402PaymentRelayerFactory.VaultCreated(merchant, predicted, payoutAddr);
 
         vm.prank(operator);
         factory.createVault(merchant, payoutAddr);

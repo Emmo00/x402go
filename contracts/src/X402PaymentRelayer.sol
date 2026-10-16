@@ -3,18 +3,18 @@ pragma solidity ^0.8.24;
 
 import {IERC3009} from "./interfaces/IERC3009.sol";
 import {IPermit2} from "./interfaces/IPermit2.sol";
-import {IX402Vault} from "./interfaces/IX402Vault.sol";
-import {IX402VaultFactory} from "./interfaces/IX402VaultFactory.sol";
+import {IX402PaymentRelayer} from "./interfaces/IX402PaymentRelayer.sol";
+import {IX402PaymentRelayerFactory} from "./interfaces/IX402PaymentRelayerFactory.sol";
 import {IX402ExactPermit2Proxy} from "./interfaces/IX402ExactPermit2Proxy.sol";
 import {EIP712} from "solady/utils/EIP712.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {SignatureCheckerLib} from "solady/utils/SignatureCheckerLib.sol";
 
-/// @title X402Vault
+/// @title X402PaymentRelayer
 /// @author emmo00 (https://github.com/emmo00)
 /// @notice A vault for managing x402 payment settlement for a merchant.
-contract X402Vault is IX402Vault, EIP712 {
+contract X402PaymentRelayer is IX402PaymentRelayer, EIP712 {
     bytes32 private constant CHANGE_PAYOUT_TYPEHASH =
         keccak256("ChangePayout(address newPayout,uint256 nonce,uint256 deadline)");
 
@@ -129,7 +129,7 @@ contract X402Vault is IX402Vault, EIP712 {
 
     /// @dev Emergency recovery for tokens that reached the vault outside `settle`.
     function rescue(address token) external {
-        IX402VaultFactory factory = IX402VaultFactory(FACTORY);
+        IX402PaymentRelayerFactory factory = IX402PaymentRelayerFactory(FACTORY);
         uint256 bal = SafeTransferLib.balanceOf(token, address(this));
         uint256 fee = factory.tokenFeeBPS(token) == 0 ? 0 : factory.tokenFee(token);
 
@@ -139,7 +139,7 @@ contract X402Vault is IX402Vault, EIP712 {
 
     /// @dev The fee for `token`, refusing any token the factory has not configured.
     function _feeFor(address token) private view returns (uint256 fee) {
-        IX402VaultFactory factory = IX402VaultFactory(FACTORY);
+        IX402PaymentRelayerFactory factory = IX402PaymentRelayerFactory(FACTORY);
 
         if (factory.tokenFeeBPS(token) == 0) revert TokenNotSupported();
 
@@ -160,6 +160,6 @@ contract X402Vault is IX402Vault, EIP712 {
     }
 
     function _domainNameAndVersion() internal pure override returns (string memory, string memory) {
-        return ("X402Vault", "1");
+        return ("X402PaymentRelayer", "1");
     }
 }

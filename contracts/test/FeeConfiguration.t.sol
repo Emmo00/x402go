@@ -2,9 +2,9 @@
 pragma solidity ^0.8.24;
 
 import {X402Base} from "./utils/X402Base.sol";
-import {X402Vault} from "../src/X402Vault.sol";
-import {IX402Vault} from "../src/interfaces/IX402Vault.sol";
-import {IX402VaultFactory} from "../src/interfaces/IX402VaultFactory.sol";
+import {X402PaymentRelayer} from "../src/X402PaymentRelayer.sol";
+import {IX402PaymentRelayer} from "../src/interfaces/IX402PaymentRelayer.sol";
+import {IX402PaymentRelayerFactory} from "../src/interfaces/IX402PaymentRelayerFactory.sol";
 import {IPermit2} from "../src/interfaces/IPermit2.sol";
 import {IX402ExactPermit2Proxy} from "../src/interfaces/IX402ExactPermit2Proxy.sol";
 import {MockERC20} from "./utils/Mocks.sol";
@@ -27,7 +27,7 @@ contract FeeConfigurationTest is X402Base {
         tokens[0] = address(token6);
         tokens[1] = address(token18);
 
-        vm.expectRevert(IX402VaultFactory.LengthMismatch.selector);
+        vm.expectRevert(IX402PaymentRelayerFactory.LengthMismatch.selector);
         vm.prank(owner);
         factory.setTokenFees(tokens, _bps(DEFAULT_BPS));
     }
@@ -42,9 +42,9 @@ contract FeeConfigurationTest is X402Base {
         fees[1] = 250;
 
         vm.expectEmit(true, false, false, true, address(factory));
-        emit IX402VaultFactory.FeeUpdated(address(token6), 10);
+        emit IX402PaymentRelayerFactory.FeeUpdated(address(token6), 10);
         vm.expectEmit(true, false, false, true, address(factory));
-        emit IX402VaultFactory.FeeUpdated(address(token18), 250);
+        emit IX402PaymentRelayerFactory.FeeUpdated(address(token18), 250);
 
         vm.prank(owner);
         factory.setTokenFees(tokens, fees);
@@ -152,12 +152,12 @@ contract FeeConfigurationTest is X402Base {
         address vault = _openVault();
         token6.mint(payer, 1_000e6);
 
-        IX402Vault.Eip3009Authorization memory auth =
+        IX402PaymentRelayer.Eip3009Authorization memory auth =
             _auth3009(payerPk, address(token6), vault, 100e6, keccak256("unconfigured"));
 
-        vm.expectRevert(IX402Vault.TokenNotSupported.selector);
+        vm.expectRevert(IX402PaymentRelayer.TokenNotSupported.selector);
         vm.prank(stranger);
-        X402Vault(vault).settle(address(token6), auth);
+        X402PaymentRelayer(vault).settle(address(token6), auth);
     }
 
     function test_aTokenWhoseFeeRoundsToZeroCannotBeSettled() public {
@@ -173,12 +173,12 @@ contract FeeConfigurationTest is X402Base {
         address vault = _openVault();
         low.mint(payer, 1_000);
 
-        IX402Vault.Eip3009Authorization memory auth =
+        IX402PaymentRelayer.Eip3009Authorization memory auth =
             _auth3009(payerPk, address(low), vault, 100, keccak256("rounds-to-zero"));
 
-        vm.expectRevert(IX402Vault.TokenNotSupported.selector);
+        vm.expectRevert(IX402PaymentRelayer.TokenNotSupported.selector);
         vm.prank(stranger);
-        X402Vault(vault).settle(address(low), auth);
+        X402PaymentRelayer(vault).settle(address(low), auth);
     }
 
     function test_aTokenWhoseFeeRoundsToZeroCannotBeSettledViaPermit2Either() public {
@@ -194,8 +194,8 @@ contract FeeConfigurationTest is X402Base {
         (IPermit2.PermitTransferFrom memory permit, IX402ExactPermit2Proxy.Witness memory wit, bytes memory sig) =
             _permit2Args(payerPk, vault, address(low), 100, uint256(keccak256("low-nonce")));
 
-        vm.expectRevert(IX402Vault.TokenNotSupported.selector);
+        vm.expectRevert(IX402PaymentRelayer.TokenNotSupported.selector);
         vm.prank(stranger);
-        X402Vault(vault).settleWithPermit2(permit, payer, wit, sig);
+        X402PaymentRelayer(vault).settleWithPermit2(permit, payer, wit, sig);
     }
 }

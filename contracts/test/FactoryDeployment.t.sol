@@ -2,8 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {X402Base} from "./utils/X402Base.sol";
-import {X402VaultFactory} from "../src/X402VaultFactory.sol";
-import {IX402Vault} from "../src/interfaces/IX402Vault.sol";
+import {X402PaymentRelayerFactory} from "../src/X402PaymentRelayerFactory.sol";
+import {IX402PaymentRelayer} from "../src/interfaces/IX402PaymentRelayer.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 
 /// @dev Suite A — factory deployment and configuration.
@@ -24,8 +24,8 @@ contract FactoryDeploymentTest is X402Base {
         // Proven behaviourally: the implementation only accepts `initPayout` from its factory, so a
         // call from anywhere else — here, the test — is refused. That is the whole of the
         // implementation/ factory relationship the vault exposes.
-        vm.expectRevert(IX402Vault.Unauthorized.selector);
-        IX402Vault(implementation).initPayout(payoutAddr);
+        vm.expectRevert(IX402PaymentRelayer.Unauthorized.selector);
+        IX402PaymentRelayer(implementation).initPayout(payoutAddr);
     }
 
     function test_constructor_setsTheOwner() public view {
@@ -71,7 +71,7 @@ contract FactoryDeploymentTest is X402Base {
     }
 
     function test_twoFactoriesHaveDistinctImplementations() public {
-        X402VaultFactory other = new X402VaultFactory(owner, operator);
+        X402PaymentRelayerFactory other = new X402PaymentRelayerFactory(owner, operator);
         assertTrue(other.implementation() != implementation);
     }
 }

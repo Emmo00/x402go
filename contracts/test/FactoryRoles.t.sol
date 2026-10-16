@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {X402Base} from "./utils/X402Base.sol";
-import {IX402VaultFactory} from "../src/interfaces/IX402VaultFactory.sol";
+import {IX402PaymentRelayerFactory} from "../src/interfaces/IX402PaymentRelayerFactory.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 
 /// @dev Suite B — the role model and `createVault` authorisation.
@@ -102,13 +102,13 @@ contract FactoryRolesTest is X402Base {
     }
 
     function test_createVaultRejectsZeroMerchant() public {
-        vm.expectRevert(IX402VaultFactory.InvalidAddress.selector);
+        vm.expectRevert(IX402PaymentRelayerFactory.InvalidAddress.selector);
         vm.prank(operator);
         factory.createVault(address(0), merchant);
     }
 
     function test_createVaultRejectsZeroPayout() public {
-        vm.expectRevert(IX402VaultFactory.InvalidAddress.selector);
+        vm.expectRevert(IX402PaymentRelayerFactory.InvalidAddress.selector);
         vm.prank(operator);
         factory.createVault(merchant, address(0));
     }
@@ -116,7 +116,7 @@ contract FactoryRolesTest is X402Base {
     function test_createVaultRejectsZeroArgumentsBeforeTheAuthorisationCheck() public {
         // The address check runs first, so even an unauthorised caller learns nothing from the
         // revert beyond "those arguments are invalid".
-        vm.expectRevert(IX402VaultFactory.InvalidAddress.selector);
+        vm.expectRevert(IX402PaymentRelayerFactory.InvalidAddress.selector);
         vm.prank(stranger);
         factory.createVault(address(0), address(0));
     }

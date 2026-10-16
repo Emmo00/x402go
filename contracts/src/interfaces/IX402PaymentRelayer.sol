@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {IPermit2} from "./IPermit2.sol";
 import {IX402ExactPermit2Proxy} from "./IX402ExactPermit2Proxy.sol";
 
-interface IX402Vault {
+interface IX402PaymentRelayer {
     /// @dev An EIP-3009 `TransferWithAuthorization` payload, signed by the payer.
     struct Eip3009Authorization {
         address from;

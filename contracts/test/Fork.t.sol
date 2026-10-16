@@ -2,8 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {X402Base} from "./utils/X402Base.sol";
-import {X402Vault} from "../src/X402Vault.sol";
-import {IX402Vault} from "../src/interfaces/IX402Vault.sol";
+import {X402PaymentRelayer} from "../src/X402PaymentRelayer.sol";
+import {IX402PaymentRelayer} from "../src/interfaces/IX402PaymentRelayer.sol";
 import {IPermit2} from "../src/interfaces/IPermit2.sol";
 import {IX402ExactPermit2Proxy} from "../src/interfaces/IX402ExactPermit2Proxy.sol";
 import {PERMIT2_ADDR, PERMIT2_DOMAIN_TYPEHASH, X402_PROXY_ADDR} from "./utils/Mocks.sol";
@@ -84,16 +84,16 @@ contract ForkTest is X402Base {
     function _forkAuth(address vault, uint256 value, bytes32 authNonce)
         internal
         view
-        returns (IX402Vault.Eip3009Authorization memory)
+        returns (IX402PaymentRelayer.Eip3009Authorization memory)
     {
         return _auth3009WithDomain(payerPk, usdcDomain, usdcTypehash, vault, value, authNonce);
     }
 
     /// @dev Settles a prebuilt payload, always relayed by `stranger`, so this also proves the vault
     /// path is permissionless against a real token.
-    function _forkSettle(address vault, IX402Vault.Eip3009Authorization memory auth) internal {
+    function _forkSettle(address vault, IX402PaymentRelayer.Eip3009Authorization memory auth) internal {
         vm.prank(stranger);
-        X402Vault(vault).settle(usdc, auth);
+        X402PaymentRelayer(vault).settle(usdc, auth);
     }
 
     /// @dev Funds `who` with real USDC by writing the token's own storage, and asserts it took: a
@@ -181,7 +181,7 @@ contract ForkTest is X402Base {
         uint256 fee = _fee(usdc);
         _fund(payer, value);
 
-        IX402Vault.Eip3009Authorization memory auth = _forkAuth(vault, value, keccak256("fork-3009"));
+        IX402PaymentRelayer.Eip3009Authorization memory auth = _forkAuth(vault, value, keccak256("fork-3009"));
         _forkSettle(vault, auth);
 
         assertEq(IForkUsdc(usdc).balanceOf(merchant), value - fee, "the merchant was not paid");
@@ -212,7 +212,7 @@ contract ForkTest is X402Base {
         // Everything above is built before the call: `_permit2Args` signs, and `vm.sign` would
         // spend a pending expectation.
         vm.prank(stranger);
-        X402Vault(vault).settleWithPermit2(permit, payer, wit, sig);
+        X402PaymentRelayer(vault).settleWithPermit2(permit, payer, wit, sig);
 
         assertEq(IForkUsdc(usdc).balanceOf(merchant), value - fee, "the merchant was not paid");
         assertEq(IForkUsdc(usdc).balanceOf(address(factory)), fee, "the factory did not take its fee");
@@ -230,7 +230,7 @@ contract ForkTest is X402Base {
         uint256 value = 100e6;
         _fund(payer, value);
 
-        IX402Vault.Eip3009Authorization memory auth = _forkAuth(vault, value, keccak256("fork-replay"));
+        IX402PaymentRelayer.Eip3009Authorization memory auth = _forkAuth(vault, value, keccak256("fork-replay"));
         _forkSettle(vault, auth);
 
         uint256 merchantBefore = IForkUsdc(usdc).balanceOf(merchant);
@@ -263,7 +263,7 @@ contract ForkTest is X402Base {
 
         vm.expectRevert();
         vm.prank(stranger);
-        X402Vault(vault).settleWithPermit2(permit, payer, wit, sig);
+        X402PaymentRelayer(vault).settleWithPermit2(permit, payer, wit, sig);
 
         assertEq(IForkUsdc(usdc).balanceOf(merchant), 0, "a misdirected signature moved funds");
     }
@@ -286,9 +286,9 @@ contract ForkTest is X402Base {
         IX402ExactPermit2Proxy.Witness memory wit = _witness(stranger, 0);
         bytes memory sig = _signPermit2(payerPk, PERMIT2_ADDR, X402_PROXY_ADDR, permit, wit);
 
-        vm.expectRevert(IX402Vault.InvalidRecipient.selector);
+        vm.expectRevert(IX402PaymentRelayer.InvalidRecipient.selector);
         vm.prank(stranger);
-        X402Vault(vault).settleWithPermit2(permit, payer, wit, sig);
+        X402PaymentRelayer(vault).settleWithPermit2(permit, payer, wit, sig);
 
         assertEq(IForkUsdc(usdc).balanceOf(stranger), 0, "a misdirected payment moved funds");
     }
