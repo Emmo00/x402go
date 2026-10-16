@@ -12,7 +12,7 @@
     "verify:e2e": "bun run verify-e2e.ts",
     "verify:lifecycle": "bun run verify-lifecycle.ts",
     "lint": "tslint -p tsconfig.json -c tslint.json",
-    "build": "bun build src/server.ts --outfile dist/server.js --target bun --sourcemap",
+    "build": "bun build src/server.ts --outdir dist --target bun --sourcemap",
     "build:facilitator": "bun run --filter x402go-facilitator build",
     "build:all": "bun run build:facilitator && bun run build",
     "production": "bun dist/server.js"
