@@ -1,6 +1,9 @@
 {
   "name": "starter-template",
   "version": "1.0.0",
+  "workspaces": [
+    "facilitator"
+  ],
   "scripts": {
     "start": "bun dist/server.js",
     "dev": "bun --watch src/server.ts",
@@ -10,6 +13,8 @@
     "verify:lifecycle": "bun run verify-lifecycle.ts",
     "lint": "tslint -p tsconfig.json -c tslint.json",
     "build": "tsc -p .",
+    "build:facilitator": "bun run --filter x402go-facilitator build",
+    "build:all": "bun run build:facilitator && bun run build",
     "production": "bun dist/server.js"
   },
   "dependencies": {
