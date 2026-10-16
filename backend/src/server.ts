@@ -23,8 +23,6 @@ const app = new App([
   new FacilitatorRoute(),
 ]);
 
-if (process.env.VERCEL !== '1') {
-  app.listen();
-}
+app.listen();
 
 export default app.getServer();
