@@ -37,8 +37,8 @@ export default function Settings() {
   const trimmed = payoutWallet.trim();
   const validationError = validatePayoutAddress(trimmed);
   const transactionTagValidationError =
-    transactionTag.trim().length > 16
-      ? 'Transaction tag must be 16 characters or less'
+    transactionTag.trim().length > 32
+      ? 'Transaction tag must be 32 characters or less'
       : transactionTag.trim().length === 0
         ? 'Transaction tag cannot be empty'
         : null;
