@@ -21,7 +21,7 @@ const signer = privateKeyToAccount(need('EVM_PRIVATE_KEY') as `0x${string}`);
 
 const NETWORK = (process.env.NETWORK ?? 'eip155:11142220') as `${string}:${string}`;
 const ASSET = process.env.ASSET ?? '0xD2ab3C9A02DBBAB236BfEC45D1d755DF4267F771'; // default USAT
-const ASSET_NAME = process.env.ASSET_NAME ?? 'USAT';
+const ASSET_NAME = process.env.ASSET_NAME ?? 'Tether America USD';
 const ASSET_VERSION = process.env.ASSET_VERSION ?? '1';
 const AMOUNT = process.env.AMOUNT ?? '10000'; // atomic units of ($0.01); must exceed the token's fee
 const METHOD = process.env.METHOD ?? 'eip3009'; // or "permit2"
