@@ -24,7 +24,7 @@ export default function Settings() {
   const transactionTagResource = useResource(RESOURCES.transactionTag);
 
   const [payoutWallet, setPayoutWallet] = useState('');
-  const [transactionTag, setTransactionTag] = useState('');
+  const [transactionTagDraft, setTransactionTagDraft] = useState(null);
   const [payoutWalletTouched, setPayoutWalletTouched] = useState(false);
   const [transactionTagTouched, setTransactionTagTouched] = useState(false);
   const [pending, setPending] = useState(false);
@@ -33,6 +33,9 @@ export default function Settings() {
   const [transactionTagActionError, setTransactionTagActionError] = useState(null);
   const [updated, setUpdated] = useState(null);
   const [transactionTagUpdated, setTransactionTagUpdated] = useState(null);
+
+  const storedTransactionTag = transactionTagResource.data?.transactionTag ?? '';
+  const transactionTag = transactionTagDraft ?? storedTransactionTag;
 
   const trimmed = payoutWallet.trim();
   const validationError = validatePayoutAddress(trimmed);
@@ -76,15 +79,16 @@ export default function Settings() {
     setTransactionTagActionError(null);
     setTransactionTagUpdated(null);
 
-    console.log('Transaction tag:', transactionTag);
-
     if (transactionTagValidationError) return;
 
     setTransactionTagPending(true);
     try {
-      const result = await updateTransactionTag(transactionTag);
-      setTransactionTagUpdated(result?.transactionTag ?? transactionTag);
-      setTransactionTag(result?.transactionTag ?? transactionTag);
+      const result = await updateTransactionTag(transactionTag.trim());
+      const saved = result?.transactionTag ?? transactionTag.trim();
+      setTransactionTagUpdated(saved);
+      // Keep the saved value as the draft (rather than resetting to `null`) so
+      // the input doesn't flash the old tag while the invalidated query refetches.
+      setTransactionTagDraft(saved);
       setTransactionTagTouched(false);
       queryClient.invalidateQueries({ queryKey: RESOURCES.transactionTag.key });
     } catch (cause) {
@@ -167,8 +171,8 @@ export default function Settings() {
           id="transaction-tag"
           label="New transaction tag"
           placeholder="celo_123456789"
-          value={transactionTagResource.data?.transactionTag ?? transactionTag}
-          onChange={(event) => setTransactionTag(event.target.value)}
+          value={transactionTag}
+          onChange={(event) => setTransactionTagDraft(event.target.value)}
           onBlur={() => setTransactionTagTouched(true)}
           error={transactionTagTouched ? transactionTagValidationError : null}
           hint=""
