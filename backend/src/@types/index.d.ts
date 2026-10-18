@@ -60,7 +60,8 @@ declare global {
      * account that has never done so has none, and `default: undefined` keeps
      * "has none" distinct from "has an empty one" in the document.
      */
-    vaults?: IVault
+    vaults?: IVault;
+    transactionTag?: string;
   }
 
   type IUserDocument = IUser & Document;

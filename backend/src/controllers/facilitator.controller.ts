@@ -44,6 +44,7 @@ class FacilitatorController {
       const result = await verify(ctx.client, ctx.payload, ctx.requirements, {
         deploymentContext: ctx.deployment,
         operatorAddress: OPERATOR_ADDRESS! as Address,
+        transactionTag: ctx.transactionTag,
       });
       console.log('Verify result:', result);
 
@@ -77,7 +78,9 @@ class FacilitatorController {
 
       const result = await settle(ctx.client as EvmSigner, ctx.payload, ctx.requirements, {
         deploymentContext: ctx.deployment,
+        transactionTag: ctx.transactionTag,
       });
+
       console.log('Settle result:', result);
 
       return res.json(result); // 200 for success and for protocol-level failures

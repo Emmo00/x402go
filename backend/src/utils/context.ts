@@ -2,7 +2,7 @@ import { isAddressEqual, type Address } from "viem";
 import type { Request } from "express";
 import { getPayloadNetwork } from "@facilitator/schemes/utils";
 import { VerifyRequestSchema, type PaymentPayload, type PaymentRequirements, type ErrorReasons } from "@facilitator/types/verify";
-import { resolveChain, type ChainConfig } from "@facilitator/types/shared/evm";
+import { resolveChain, TRANSACTION_TAG, type ChainConfig } from "@facilitator/types/shared/evm";
 import { getPublicClient, getSignerClient } from "@/utils/chainClient";
 import type { VaultDeploymentContext } from "@facilitator/types/config";
 
@@ -13,6 +13,7 @@ export interface Ctx {
   client: ReturnType<typeof getSignerClient> | ReturnType<typeof getPublicClient>;
   deployment: VaultDeploymentContext;
   deployer?: Address;
+  transactionTag?: string;
 }
 export interface Rejection { status: number; reason: typeof ErrorReasons[number]; payer?: Address }
 
@@ -35,5 +36,6 @@ export async function buildContext(type: "verify" | "settle", req: Request, merc
   return {
     payload, requirements, chain, client,
     deployment: merchant,
+    transactionTag: req.user?.transactionTag ?? TRANSACTION_TAG
   };
 }

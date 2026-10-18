@@ -1,4 +1,4 @@
-import { fetchAccount, fetchOverview, fetchPayoutAddress } from './dashboard';
+import { fetchAccount, fetchOverview, fetchPayoutAddress, fetchTransactionTag } from './dashboard';
 
 /**
  * The dashboard's cached reads, described once each.
@@ -29,6 +29,11 @@ export const RESOURCES = {
   payout: {
     key: [...CACHE_SCOPE, 'payout'],
     load: fetchPayoutAddress,
+    staleTime: 30_000,
+  },
+  transactionTag: {
+    key: [...CACHE_SCOPE, 'transactionTag'],
+    load: fetchTransactionTag,
     staleTime: 30_000,
   },
   // Nothing serves this yet — the loader throws `EndpointUnavailableError` — but

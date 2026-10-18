@@ -6,6 +6,7 @@ import AuthRoute from './routes/auth.route';
 import AccountRoute from './routes/account.route';
 import ApiKeysRoute from './routes/apiKeys.route';
 import PayoutRoute from './routes/payout.route';
+import TransactionTagRoute from './routes/transactionTag.route';
 import FacilitatorRoute from './routes/facilitator.route';
 import SkillRoute from './routes/skill.route';
 import validateEnv from './utils/validateEnv';
@@ -20,6 +21,7 @@ const app = new App([
   new ApiKeysRoute(),
   new PayoutRoute(),
   new SkillRoute(),
+  new TransactionTagRoute(),
   new FacilitatorRoute(),
 ]);
 

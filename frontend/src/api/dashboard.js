@@ -60,6 +60,16 @@ export function fetchPayoutAddress() {
 }
 
 /**
+ * `GET /transaction-tag` → 200 `{ transactionTag: string | null }`
+ *
+ * `transactionTag` is `null` until the account has set one, which is the state the
+ * onboarding step keys off. 401 when the session is gone.
+ */
+export function fetchTransactionTag() {
+  return apiFetch('/transaction-tag');
+}
+
+/**
  * `PUT /payout` — `{ payTo }` → 200 `{ payTo }` (lowercased)
  *
  * The account comes from the session cookie, never from the body, so there is
@@ -67,6 +77,10 @@ export function fetchPayoutAddress() {
  */
 export function updatePayoutAddress(payTo) {
   return apiFetch('/payout', { method: 'PUT', body: { payTo } });
+}
+
+export function updateTransactionTag(transactionTag) {
+  return apiFetch('/transaction-tag', { method: 'PUT', body: { transactionTag } });
 }
 
 /* -------------------------------------------------------------------------- */

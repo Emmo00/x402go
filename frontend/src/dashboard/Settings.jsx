@@ -1,18 +1,9 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { updatePayoutAddress } from '../api/dashboard';
+import { updatePayoutAddress, updateTransactionTag } from '../api/dashboard';
 import { RESOURCES } from '../api/resources';
 import { useAuth } from '../auth/AuthContext';
-import {
-  Address,
-  Button,
-  Card,
-  CardHeader,
-  CopyButton,
-  Field,
-  Notice,
-  StatePanel,
-} from '../components/ui/primitives';
+import { Address, Button, Card, CardHeader, CopyButton, Field, Notice, StatePanel } from '../components/ui/primitives';
 import { describeError, isUnauthorized } from './errors';
 import { checksumPayoutAddress, validatePayoutAddress } from './payoutAddress';
 import ResourceState, { ActionErrorNotice } from './ResourceState';
@@ -30,19 +21,31 @@ export default function Settings() {
   const { notifyUnauthorized } = useAuth();
   const queryClient = useQueryClient();
   const resource = useResource(RESOURCES.payout);
+  const transactionTagResource = useResource(RESOURCES.transactionTag);
 
-  const [value, setValue] = useState('');
-  const [touched, setTouched] = useState(false);
+  const [payoutWallet, setPayoutWallet] = useState('');
+  const [transactionTag, setTransactionTag] = useState('');
+  const [payoutWalletTouched, setPayoutWalletTouched] = useState(false);
+  const [transactionTagTouched, setTransactionTagTouched] = useState(false);
   const [pending, setPending] = useState(false);
+  const [transactionTagPending, setTransactionTagPending] = useState(false);
   const [actionError, setActionError] = useState(null);
+  const [transactionTagActionError, setTransactionTagActionError] = useState(null);
   const [updated, setUpdated] = useState(null);
+  const [transactionTagUpdated, setTransactionTagUpdated] = useState(null);
 
-  const trimmed = value.trim();
+  const trimmed = payoutWallet.trim();
   const validationError = validatePayoutAddress(trimmed);
+  const transactionTagValidationError =
+    transactionTag.trim().length > 16
+      ? 'Transaction tag must be 16 characters or less'
+      : transactionTag.trim().length === 0
+        ? 'Transaction tag cannot be empty'
+        : null;
 
   async function handleSubmit(event) {
     event.preventDefault();
-    setTouched(true);
+    setPayoutWalletTouched(true);
     setActionError(null);
     setUpdated(null);
 
@@ -54,8 +57,8 @@ export default function Settings() {
       // value rather than something to assume.
       const result = await updatePayoutAddress(checksumPayoutAddress(trimmed));
       setUpdated(result?.payTo ?? checksumPayoutAddress(trimmed));
-      setValue('');
-      setTouched(false);
+      setPayoutWallet('');
+      setPayoutWalletTouched(false);
       // The payout wallet is a cached read shared with the onboarding gate, so
       // the write invalidates it rather than refetching through this screen.
       queryClient.invalidateQueries({ queryKey: RESOURCES.payout.key });
@@ -67,32 +70,47 @@ export default function Settings() {
     }
   }
 
+  async function handleTransactionTagSubmit(event) {
+    event.preventDefault();
+    setTransactionTagTouched(true);
+    setTransactionTagActionError(null);
+    setTransactionTagUpdated(null);
+
+    console.log('Transaction tag:', transactionTag);
+
+    if (transactionTagValidationError) return;
+
+    setTransactionTagPending(true);
+    try {
+      const result = await updateTransactionTag(transactionTag);
+      setTransactionTagUpdated(result?.transactionTag ?? transactionTag);
+      setTransactionTag(result?.transactionTag ?? transactionTag);
+      setTransactionTagTouched(false);
+      queryClient.invalidateQueries({ queryKey: RESOURCES.transactionTag.key });
+    } catch (cause) {
+      if (isUnauthorized(cause)) notifyUnauthorized();
+      setTransactionTagActionError(cause);
+    } finally {
+      setTransactionTagPending(false);
+    }
+  }
+
   return (
     <div className="dash-page">
       <header className="page-head">
         <h1 className="page-head__title">Settings</h1>
-        <p className="page-head__desc">
-          The account details your facilitator uses to settle and deliver
-          payments.
-        </p>
+        <p className="page-head__desc">The account details your facilitator uses to settle and deliver payments.</p>
       </header>
 
       <section className="section" aria-labelledby="current-payout">
         <h2 className="section__label" id="current-payout">
           Payout wallet
         </h2>
-        <ResourceState
-          resource={resource}
-          label="Payout wallet"
-          loadingTitle="Loading your payout wallet…"
-        >
+        <ResourceState resource={resource} label="Payout wallet" loadingTitle="Loading your payout wallet…">
           {(data) =>
             data?.payTo ? (
               <Card>
-                <CardHeader
-                  title="Payout wallet"
-                  description="The wallet where your settled x402 payments are sent."
-                />
+                <CardHeader title="Payout wallet" description="The wallet where your settled x402 payments are sent." />
                 <p className="payout-current">
                   <Address value={data.payTo} full />
                 </p>
@@ -101,37 +119,27 @@ export default function Settings() {
                 </div>
               </Card>
             ) : (
-              <StatePanel
-                label="No payout wallet"
-                title="No payout wallet set"
-                data-empty="payout-wallet"
-              >
-                Settled payments have nowhere to go until you set one. Reload
-                this page to finish onboarding.
+              <StatePanel label="No payout wallet" title="No payout wallet set" data-empty="payout-wallet">
+                Settled payments have nowhere to go until you set one. Reload this page to finish onboarding.
               </StatePanel>
             )
           }
         </ResourceState>
       </section>
 
-      <Notice title="Authorization required">
-        Changing this wallet requires authorization from your wallet.
-      </Notice>
+      <Notice title="Authorization required">Changing this wallet requires authorization from your wallet.</Notice>
 
       <Card as="form" onSubmit={handleSubmit} noValidate>
-        <CardHeader
-          title="Change payout wallet"
-          description="Point settled payments at a different wallet."
-        />
+        <CardHeader title="Change payout wallet" description="Point settled payments at a different wallet." />
 
         <Field
           id="payout-wallet"
           label="New wallet address"
           placeholder="0x…"
-          value={value}
-          onChange={(event) => setValue(event.target.value)}
-          onBlur={() => setTouched(true)}
-          error={touched ? validationError : null}
+          value={payoutWallet}
+          onChange={(event) => setPayoutWallet(event.target.value)}
+          onBlur={() => setPayoutWalletTouched(true)}
+          error={payoutWalletTouched ? validationError : null}
           hint="Must be a Celo address. Payments cannot be reversed, so check it carefully."
           autoComplete="off"
           spellCheck="false"
@@ -150,6 +158,37 @@ export default function Settings() {
         ) : null}
 
         <ActionErrorNotice error={actionError} />
+      </Card>
+
+      <Card as="form" onSubmit={handleTransactionTagSubmit} noValidate>
+        <CardHeader title="Change Transaction Tag" description="Change the tag used for tracking transactions." />
+
+        <Field
+          id="transaction-tag"
+          label="New transaction tag"
+          placeholder="celo_123456789"
+          value={transactionTagResource.data?.transactionTag ?? transactionTag}
+          onChange={(event) => setTransactionTag(event.target.value)}
+          onBlur={() => setTransactionTagTouched(true)}
+          error={transactionTagTouched ? transactionTagValidationError : null}
+          hint=""
+          autoComplete="off"
+          spellCheck="false"
+        />
+
+        <div className="actions">
+          <Button type="submit" disabled={transactionTagPending} aria-busy={transactionTagPending || undefined}>
+            {transactionTagPending ? 'Saving…' : 'Update transaction tag'}
+          </Button>
+        </div>
+
+        {transactionTagUpdated ? (
+          <Notice title="Transaction tag updated">
+            Settled payments now use the tag <code>{transactionTagUpdated}</code>.
+          </Notice>
+        ) : null}
+
+        <ActionErrorNotice error={transactionTagActionError} />
       </Card>
     </div>
   );
