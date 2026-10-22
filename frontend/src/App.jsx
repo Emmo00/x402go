@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router';
 import './App.css';
 import './dashboard/dashboard.css';
 
+import PricingAndTokens from './components/PricingAndTokens';
 import Benefits from './components/Benefits';
 import FinalCta from './components/FinalCta';
 import Hero from './components/Hero';
@@ -23,6 +24,7 @@ function Landing() {
       <SiteHeader />
       <main>
         <Hero />
+        <PricingAndTokens />
         <Benefits />
         <FinalCta />
       </main>

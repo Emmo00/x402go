@@ -1,35 +1,10 @@
-const BENEFITS = [
-  {
-    title: 'No upfront funding',
-    body: 'Start accepting payments without depositing money into a facilitator balance.',
-  },
-  {
-    title: 'Pay as you go',
-    body: 'Your facilitator fees are deducted automatically from the payments you receive. No manual top-ups.',
-  },
-  {
-    title: 'One API key',
-    body: 'Sign up, get your API key, and integrate x402Go into your application.',
-  },
-  {
-    title: 'Built for developers',
-    body: 'Simple APIs, straightforward integration, and everything you need to get your x402 payments running.',
-  },
-  {
-    title: 'Payment analytics',
-    body: 'See your payments, revenue, fees, and usage from one dashboard.',
-  },
-  {
-    title: 'Transparent payment history',
-    body: "Know exactly what you've received and what you've paid in fees.",
-  },
-];
+import { BENEFITS } from '../constants';
 
 function Benefits() {
   return (
-    <section className="benefits" aria-labelledby="benefits-title">
+    <section className="section" aria-labelledby="benefits-title">
       <div className="container">
-        <h2 className="benefits__heading" id="benefits-title">
+        <h2 className="section__title section__title--wide" id="benefits-title">
           Everything you need to accept x402 payments
         </h2>
         <ol className="benefits__grid">
