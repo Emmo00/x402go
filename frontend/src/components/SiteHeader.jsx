@@ -12,8 +12,11 @@ function SiteHeader() {
           <a className="site-header__link" href="https://github.com/Emmo00/x402go" target="_blank" rel="noopener noreferrer">
             GitHub
           </a>
-          <a className="site-header__link" href="https://x402go.mintlify.site/" target="_blank" rel="noopener noreferrer">
+          <a className="site-header__link" href="https://docs.x402go.online" target="_blank" rel="noopener noreferrer">
             Docs
+          </a>
+          <a className="site-header__link" href="https://docs.x402go.online/llms-full.txt" target="_blank" rel="noopener noreferrer">
+            LLMS.txt
           </a>
         </nav>
       </div>

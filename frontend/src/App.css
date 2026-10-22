@@ -153,11 +153,13 @@ button:focus-visible,
   letter-spacing: var(--tracking-caption);
   color: var(--color-steel);
   text-decoration: none;
-  transition: color 120ms ease;
+  transition: color 420ms ease;
+  border-bottom: 1px dotted var(--color-bone)
 }
 
 .site-header__link:hover {
   color: var(--color-bone);
+  border-bottom-color: var(--color-phosphor-green);
 }
 
 /* ==========================================================================
