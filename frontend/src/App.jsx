@@ -17,6 +17,13 @@ import OnboardingGate from './dashboard/OnboardingGate';
 import Overview from './dashboard/Overview';
 import Settings from './dashboard/Settings';
 import { API_KEY_ROUTE, DASHBOARD_ROUTES } from './routes';
+import { DEMO_MODE } from './env';
+
+function DemoModeBanner() {
+  if (!DEMO_MODE) return null;
+
+  return <div className="demo-mode-banner">Demo mode — no real payments or secrets are used.</div>;
+}
 
 function Landing() {
   return (
@@ -35,7 +42,9 @@ function Landing() {
 
 export default function App() {
   return (
-    <Routes>
+    <>
+      <DemoModeBanner />
+      <Routes>
       <Route path="/" element={<Landing />} />
 
       {/* The landing page's calls to action land on the API-key screen, which
@@ -66,6 +75,7 @@ export default function App() {
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+      </Routes>
+    </>
   );
 }

@@ -1,12 +1,15 @@
 import { cleanEnv, str } from 'envalid';
 
 function validateEnv() {
+  const demoMode = process.env.DEMO_MODE === 'true';
+
   cleanEnv(process.env, {
     NODE_ENV: str(),
-    MONGO_CONNECTION_URL: str(),
-    SESSION_SECRET: str(),
-    OPERATOR_KEY: str(),
-    OPERATOR_ADDRESS: str(),
+    DEMO_MODE: str({ default: 'false' }),
+    MONGO_CONNECTION_URL: str({ default: demoMode ? 'mongodb://127.0.0.1:27017/x402go-demo' : undefined }),
+    SESSION_SECRET: str({ default: demoMode ? 'x402go-demo-session' : undefined }),
+    OPERATOR_KEY: str({ default: demoMode ? '0x0000000000000000000000000000000000000000000000000000000000000001' : undefined }),
+    OPERATOR_ADDRESS: str({ default: demoMode ? '0x0000000000000000000000000000000000000000' : undefined }),
     // Pepper for API-key hashing. Optional so an existing deployment still
     // boots: `src/utils/apiKey.ts` falls back to SESSION_SECRET and documents
     // that the dedicated value is what should be set in any real environment.

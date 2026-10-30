@@ -93,7 +93,8 @@ Failure modes, both `401`:
 A missing key and an invalid one are deliberately distinguishable; an unknown key
 and a rotated-away one are not.
 
-> Send the x402Go API key only to your x402go deployment. It authenticates the
+> Never send your x402Go API key to Celo. Send it only to your x402go deployment.
+> It authenticates the
 > merchant-facing API and is not a blockchain or wallet credential.
 
 ## Supported networks and assets

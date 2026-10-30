@@ -1,7 +1,20 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-const { auth, api } = vi.hoisted(() => ({ auth: { current: null }, api: {} }));
+const { auth, api } = vi.hoisted(() => ({
+  auth: { current: null },
+  api: {
+    fetchOverview: vi.fn(),
+    fetchTransactionTag: vi.fn(),
+    fetchAccount: vi.fn(),
+    fetchPayoutAddress: vi.fn(),
+    updatePayoutAddress: vi.fn(),
+    createApiKey: vi.fn(),
+    rotateApiKey: vi.fn(),
+    fetchApiKey: vi.fn(),
+  },
+}));
 
 vi.mock('../auth/AuthContext', () => ({
   AuthStatus: {
@@ -16,6 +29,9 @@ vi.mock('../auth/AuthContext', () => ({
 }));
 
 vi.mock('../api/dashboard', () => ({
+  fetchOverview: (...args) => api.fetchOverview(...args),
+  fetchAccount: (...args) => api.fetchAccount(...args),
+  fetchTransactionTag: (...args) => api.fetchTransactionTag(...args),
   fetchPayoutAddress: (...args) => api.fetchPayoutAddress(...args),
   updatePayoutAddress: (...args) => api.updatePayoutAddress(...args),
   createApiKey: (...args) => api.createApiKey(...args),
@@ -25,6 +41,11 @@ vi.mock('../api/dashboard', () => ({
 
 import { ApiError } from '../api/client';
 import Settings from './Settings';
+
+function render(ui) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return rtlRender(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
 
 const CURRENT = '0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359';
 // Typed all in lower case, as a wallet or block explorer would hand it over.

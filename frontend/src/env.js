@@ -13,6 +13,7 @@ export const API_BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8
  * failed API calls. Injected wallets (MetaMask, Rabby, …) work regardless.
  */
 export const WALLETCONNECT_PROJECT_ID = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || '';
+export const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true';
 
 if (import.meta.env.DEV && !WALLETCONNECT_PROJECT_ID) {
   console.warn(

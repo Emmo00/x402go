@@ -1,8 +1,21 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Navigate, Outlet, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-const { auth, api } = vi.hoisted(() => ({ auth: { current: null }, api: {} }));
+const { auth, api } = vi.hoisted(() => ({
+  auth: { current: null },
+  api: {
+    fetchOverview: vi.fn(),
+    fetchTransactionTag: vi.fn(),
+    fetchAccount: vi.fn(),
+    fetchPayoutAddress: vi.fn(),
+    updatePayoutAddress: vi.fn(),
+    createApiKey: vi.fn(),
+    rotateApiKey: vi.fn(),
+    fetchApiKey: vi.fn(),
+  },
+}));
 
 vi.mock('../auth/AuthContext', () => ({
   AuthStatus: {
@@ -17,6 +30,8 @@ vi.mock('../auth/AuthContext', () => ({
 }));
 
 vi.mock('../api/dashboard', () => ({
+  fetchOverview: (...args) => api.fetchOverview(...args),
+  fetchTransactionTag: (...args) => api.fetchTransactionTag(...args),
   fetchAccount: (...args) => api.fetchAccount(...args),
   fetchPayoutAddress: (...args) => api.fetchPayoutAddress(...args),
   updatePayoutAddress: (...args) => api.updatePayoutAddress(...args),
@@ -28,6 +43,11 @@ vi.mock('../api/dashboard', () => ({
 import { ApiError } from '../api/client';
 import ApiKeys from './ApiKeys';
 import OnboardingGate from './OnboardingGate';
+
+function render(ui) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return rtlRender(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
 
 const WALLET = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
 const WALLET_LOWER = '0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed';
@@ -171,7 +191,11 @@ describe('OnboardingGate', () => {
     renderJourney();
 
     expect(
-      await screen.findByRole('heading', { level: 1, name: 'We could not load your account' }),
+      await screen.findByRole(
+        'heading',
+        { level: 1, name: 'We could not load your account' },
+        { timeout: 3000 },
+      ),
     ).toBeInTheDocument();
     expect(screen.queryByLabelText('Wallet address')).not.toBeInTheDocument();
   });

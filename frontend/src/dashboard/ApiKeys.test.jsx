@@ -1,7 +1,20 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render as rtlRender, screen, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-const { auth, api } = vi.hoisted(() => ({ auth: { current: null }, api: {} }));
+const { auth, api } = vi.hoisted(() => ({
+  auth: { current: null },
+  api: {
+    fetchOverview: vi.fn(),
+    fetchTransactionTag: vi.fn(),
+    fetchAccount: vi.fn(),
+    fetchPayoutAddress: vi.fn(),
+    updatePayoutAddress: vi.fn(),
+    createApiKey: vi.fn(),
+    rotateApiKey: vi.fn(),
+    fetchApiKey: vi.fn(),
+  },
+}));
 
 vi.mock('../auth/AuthContext', () => ({
   AuthStatus: {
@@ -16,6 +29,8 @@ vi.mock('../auth/AuthContext', () => ({
 }));
 
 vi.mock('../api/dashboard', () => ({
+  fetchOverview: (...args) => api.fetchOverview(...args),
+  fetchTransactionTag: (...args) => api.fetchTransactionTag(...args),
   fetchAccount: (...args) => api.fetchAccount(...args),
   fetchPayoutAddress: (...args) => api.fetchPayoutAddress(...args),
   updatePayoutAddress: (...args) => api.updatePayoutAddress(...args),
@@ -27,6 +42,11 @@ vi.mock('../api/dashboard', () => ({
 import { ApiError } from '../api/client';
 import ApiKeys from './ApiKeys';
 import { OnboardingHandoff } from './onboardingHandoff';
+
+function render(ui) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return rtlRender(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
 
 const ISSUED_KEY = 'x402go_K7fQ2mZ0pLxVbN4tRwYcHs8dJgAeUiOn3qB6vXzM1kP';
 const ROTATED_KEY = 'x402go_Zq4Wn1sT8bYdF5hJm2Kp6RcXv9LgEaUo7iN3wBy0DS';
@@ -70,9 +90,29 @@ const openRotation = async () => {
   return screen.getByRole('dialog');
 };
 
-beforeEach(() => {
+function setAccountKey(apiKey) {
   api.fetchAccount = vi.fn().mockResolvedValue({
     address: '0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed',
+    apiKey,
+    vaults: null,
+  });
+}
+
+async function clickCreate() {
+  const button = await screen.findByRole('button', { name: 'Create API key' });
+  await waitFor(() => expect(button).toBeEnabled());
+  fireEvent.click(button);
+}
+
+beforeEach(() => {
+  api.fetchApiKey = vi.fn().mockResolvedValue({
+    suffix: FIRST.suffix,
+    maskedKey: FIRST.maskedKey,
+    createdAt: FIRST.createdAt,
+  });
+  api.fetchAccount = vi.fn().mockImplementation(async () => ({
+    address: '0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed',
+    apiKey: await api.fetchApiKey(),
     vaults: [
       {
         network: 'celo',
@@ -83,15 +123,9 @@ beforeEach(() => {
         explorerUrl: 'https://celoscan.io/address/0x59f3d0c53bc46a35a81e478b080cc8afa2fc88de',
       },
     ],
-  });
+  }));
   api.fetchPayoutAddress = vi.fn();
   api.updatePayoutAddress = vi.fn();
-  // What an account with one key reads back once `GET /api-keys` exists.
-  api.fetchApiKey = vi.fn().mockResolvedValue({
-    suffix: FIRST.suffix,
-    maskedKey: FIRST.maskedKey,
-    createdAt: FIRST.createdAt,
-  });
   api.createApiKey = vi.fn().mockResolvedValue(FIRST);
   api.rotateApiKey = vi.fn().mockResolvedValue(ROTATED);
   setAuth();
@@ -111,7 +145,7 @@ describe('ApiKeys', () => {
   });
 
   test('starts from an empty state when the account has no key', async () => {
-    api.fetchApiKey = vi.fn().mockResolvedValue(null);
+    setAccountKey(null);
 
     renderKeys();
 
@@ -121,10 +155,10 @@ describe('ApiKeys', () => {
   });
 
   test('shows a newly created key once, with its copy action', async () => {
-    api.fetchApiKey = vi.fn().mockResolvedValue(null);
+    setAccountKey(null);
 
     renderKeys();
-    fireEvent.click(screen.getByRole('button', { name: 'Create API key' }));
+    await clickCreate();
 
     expect(await screen.findByText(ISSUED_KEY)).toBeInTheDocument();
     expect(screen.getByText('Your API key has been created.')).toBeInTheDocument();
@@ -135,10 +169,10 @@ describe('ApiKeys', () => {
   });
 
   test('removes the plaintext from state once the reveal is dismissed', async () => {
-    api.fetchApiKey = vi.fn().mockResolvedValue(null);
+    setAccountKey(null);
 
     renderKeys();
-    fireEvent.click(screen.getByRole('button', { name: 'Create API key' }));
+    await clickCreate();
     await screen.findByText(ISSUED_KEY);
 
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
@@ -149,13 +183,13 @@ describe('ApiKeys', () => {
   });
 
   test('reports a key that could not be created without inventing one', async () => {
-    api.fetchApiKey = vi.fn().mockResolvedValue(null);
+    setAccountKey(null);
     api.createApiKey = vi
       .fn()
       .mockRejectedValue(new ApiError('E11000 duplicate key', { status: 500 }));
 
     renderKeys();
-    fireEvent.click(screen.getByRole('button', { name: 'Create API key' }));
+    await clickCreate();
 
     expect(
       await screen.findByText(
@@ -169,13 +203,13 @@ describe('ApiKeys', () => {
   // An account may hold exactly one key, so a second create is a conflict —
   // which is an answer about the account's state, not a failure.
   test('reads a conflict as "you already have a key"', async () => {
-    api.fetchApiKey = vi.fn().mockResolvedValue(null);
+    setAccountKey(null);
     api.createApiKey = vi
       .fn()
       .mockRejectedValue(new ApiError('This account already has an API key.', { status: 409 }));
 
     renderKeys();
-    fireEvent.click(screen.getByRole('button', { name: 'Create API key' }));
+    await clickCreate();
 
     expect(
       await screen.findByText(
@@ -186,7 +220,7 @@ describe('ApiKeys', () => {
   });
 
   test('creates the first key automatically when onboarding hands over', async () => {
-    api.fetchApiKey = vi.fn().mockResolvedValue(null);
+    setAccountKey(null);
     const consume = vi.fn();
 
     renderKeys({ autoCreate: true, consume });
@@ -198,7 +232,7 @@ describe('ApiKeys', () => {
   });
 
   test('does not issue a key on a visit that did not come from onboarding', async () => {
-    api.fetchApiKey = vi.fn().mockResolvedValue(null);
+    setAccountKey(null);
 
     renderKeys();
 
@@ -267,13 +301,13 @@ describe('ApiKeys', () => {
 
   test('hands an expired session back to sign-in', async () => {
     const state = setAuth();
-    api.fetchApiKey = vi.fn().mockResolvedValue(null);
+    setAccountKey(null);
     api.createApiKey = vi
       .fn()
       .mockRejectedValue(new ApiError('Authentication required', { status: 401 }));
 
     renderKeys();
-    fireEvent.click(screen.getByRole('button', { name: 'Create API key' }));
+    await clickCreate();
 
     await waitFor(() => expect(state.notifyUnauthorized).toHaveBeenCalledOnce());
     expect(

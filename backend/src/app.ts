@@ -42,23 +42,27 @@ class App {
     // protocol once the proxy is trusted.
     this.app.set('trust proxy', 1);
 
-    this.app.use(
-      session({
-        secret: process.env.SESSION_SECRET || 'default_secret',
-        store: MongoStore.create({
-          mongoUrl: process.env.MONGO_CONNECTION_URL as string,
-          collectionName: 'sessions',
-        }),
-        resave: false,
-        saveUninitialized: false,
-        cookie: {
-          httpOnly: true,
-          sameSite: 'lax',
-          secure: 'auto',
-          maxAge: 3600000, // 1 hour — mirrored by SESSION_TTL_MS in the frontend
-        },
-      }),
-    );
+    const options = {
+      secret: process.env.SESSION_SECRET || 'default_secret',
+      ...(process.env.DEMO_MODE === 'true'
+        ? {}
+        : {
+            store: MongoStore.create({
+              mongoUrl: process.env.MONGO_CONNECTION_URL as string,
+              collectionName: 'sessions',
+            }),
+          }),
+      resave: false,
+      saveUninitialized: false,
+      cookie: {
+        httpOnly: true,
+        sameSite: 'lax' as const,
+        secure: 'auto' as const,
+        maxAge: 3600000, // 1 hour — mirrored by SESSION_TTL_MS in the frontend
+      },
+    };
+
+    this.app.use(session(options));
   }
 
   public initSwaggerDocs() {
@@ -92,6 +96,8 @@ class App {
   }
 
   private connectToDatabase() {
+    if (process.env.DEMO_MODE === 'true') return;
+
     const { MONGO_CONNECTION_URL } = process.env;
     mongoose.set('strictQuery', false);
     mongoose.connect(MONGO_CONNECTION_URL as string);

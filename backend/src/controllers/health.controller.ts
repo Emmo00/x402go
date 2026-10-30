@@ -115,6 +115,11 @@ export function live(_req: Request, res: Response): void {
 }
 
 export async function ready(req: Request, res: Response): Promise<void> {
+  if (process.env.DEMO_MODE === 'true') {
+    res.json({ status: 'ok', mode: 'demo' });
+    return;
+  }
+
   if (!cached || Date.now() - cached.at > 15_000) {
     if (!inFlight) {
       inFlight = compute().finally(() => {

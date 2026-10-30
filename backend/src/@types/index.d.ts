@@ -88,17 +88,19 @@ declare global {
   }
 }
 
-type Check = { ok: boolean; ms: number; note?: string };
-type ChainChecks = {
-  rpc: Check;
-  gas: Check;
-  nonce: Check;
-  operatorRole: Check;
-};
-type HealthResult = {
-  code: 200 | 503;
-  body: {
-    status: 'ok' | 'degraded' | 'down';
-    checks: { database: Check; chains: Record<string, ChainChecks> };
+declare global {
+  type Check = { ok: boolean; ms: number; note?: string };
+  type ChainChecks = {
+    rpc: Check;
+    gas: Check;
+    nonce: Check;
+    operatorRole: Check;
   };
-};
+  type HealthResult = {
+    code: 200 | 503;
+    body: {
+      status: 'ok' | 'degraded' | 'down';
+      checks: { database: Check; chains: Record<string, ChainChecks> };
+    };
+  };
+}

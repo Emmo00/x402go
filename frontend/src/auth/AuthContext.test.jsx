@@ -1,5 +1,6 @@
 import { StrictMode } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 /**
@@ -48,11 +49,15 @@ function Status() {
 // StrictMode mirrors src/index.jsx, so the double-invoked effects are part of
 // every test rather than a case of their own.
 function view() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
   return (
     <StrictMode>
-      <AuthProvider>
-        <Status />
-      </AuthProvider>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <Status />
+        </AuthProvider>
+      </QueryClientProvider>
     </StrictMode>
   );
 }
@@ -158,14 +163,16 @@ describe('automatic sign-in after connecting', () => {
 describe('cancelling an attempt', () => {
   /** A signature prompt that stays open until the test resolves it. */
   function pendingSignature() {
-    let settle;
+    let resolve;
+    let reject;
+    const promise = new Promise((promiseResolve, promiseReject) => {
+      resolve = promiseResolve;
+      reject = promiseReject;
+    });
     wallet.signMessageAsync.mockImplementation(
-      () =>
-        new Promise((resolve, reject) => {
-          settle = { resolve, reject };
-        }),
+      () => promise,
     );
-    return settle;
+    return { resolve, reject };
   }
 
   test('a disconnect mid-signature abandons the attempt', async () => {

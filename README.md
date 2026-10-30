@@ -19,6 +19,24 @@ settlement.
 - [API reference](https://docs.x402go.online/api-reference/overview.md)
 - [Security and contracts](https://docs.x402go.online/guides/security.md)
 
+## Run locally in demo mode
+
+Demo mode starts the backend without MongoDB, wallet secrets, or public RPC
+access. It is intended for local UI and health-check smoke tests, not for
+settling real payments.
+
+```powershell
+cd backend
+cp .env.example .env
+export DEMO_MODE = "true"
+bun install
+bun run dev
+```
+
+The readiness endpoint is available at `http://localhost:3000/health/ready`.
+For a production-like run, configure the secrets listed in
+[`backend/.env.example`](./backend/.env.example) and leave `DEMO_MODE=false`.
+
 ## Deployed contracts
 
 The same deployment addresses are used on Celo mainnet and Celo Sepolia.

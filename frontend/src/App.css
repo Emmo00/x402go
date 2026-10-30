@@ -686,3 +686,15 @@ button:focus-visible,
     animation: none;
   }
 }
+.demo-mode-banner {
+  position: fixed;
+  z-index: 20;
+  top: 0;
+  right: 0;
+  left: 0;
+  padding: 0.5rem 1rem;
+  color: #0b0e12;
+  background: #00d892;
+  font: 600 0.75rem/1.2 monospace;
+  text-align: center;
+}

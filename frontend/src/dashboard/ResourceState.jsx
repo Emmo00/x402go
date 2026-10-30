@@ -24,7 +24,7 @@ export default function ResourceState({ resource, label, loadingTitle, children 
         title="Not available yet"
         data-unavailable={error.endpoint}
       >
-        Coming Soon
+        {error.endpoint}
       </StatePanel>
     );
   }

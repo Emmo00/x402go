@@ -182,7 +182,9 @@ describe('PUT /payout', () => {
     const payTo = someAddress();
 
     await agent.put('/payout').send({ payTo });
-    const second = await agent.put('/payout').send({ payTo });
+    const second = await agent
+      .put('/payout')
+      .send({ payTo, changePayoutSignature: '0xsignature' });
 
     expect(second.status).toBe(200);
     expect(second.body.payTo).toBe(payTo.toLowerCase());
@@ -195,7 +197,9 @@ describe('PUT /payout', () => {
     const replacement = someAddress();
 
     await agent.put('/payout').send({ payTo: original });
-    const response = await agent.put('/payout').send({ payTo: replacement });
+    const response = await agent
+      .put('/payout')
+      .send({ payTo: replacement, changePayoutSignature: '0xsignature' });
 
     expect(response.body.payTo).toBe(replacement.toLowerCase());
     expect(await storedPayTo(address)).toBe(replacement.toLowerCase());

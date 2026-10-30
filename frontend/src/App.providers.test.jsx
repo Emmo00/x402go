@@ -44,7 +44,10 @@ describe('provider tree', () => {
     renderApp('/');
 
     expect(
-      screen.getByRole('heading', { level: 1, name: 'x402Go' }),
+      screen.getByRole('heading', {
+        level: 1,
+        name: 'Start accepting x402 payments immediately.',
+      }),
     ).toBeInTheDocument();
     expect(screen.getAllByRole('link', { name: /get your api key/i })).toHaveLength(2);
   });
@@ -71,7 +74,10 @@ describe('provider tree', () => {
     renderApp('/nope');
 
     expect(
-      screen.getByRole('heading', { level: 1, name: 'x402Go' }),
+      screen.getByRole('heading', {
+        level: 1,
+        name: 'Start accepting x402 payments immediately.',
+      }),
     ).toBeInTheDocument();
   });
 });
