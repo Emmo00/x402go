@@ -59,3 +59,14 @@ implementation, or operator address.
 | Operator | [`0x402001B3fbf1462939657eb7f64EE3743eAdf35E`](https://sepolia.celoscan.io/address/0x402001B3fbf1462939657eb7f64EE3743eAdf35E) |
 | Payment relayer factory | [`0xdfBB7b9F9449024A36E34539f94e1ca14f404ef6`](https://sepolia.celoscan.io/address/0xdfBB7b9F9449024A36E34539f94e1ca14f404ef6) |
 | Payment relayer implementation | [`0x2A081D94C3bA4183bBFd907A39Ad1597DD9261a1`](https://sepolia.celoscan.io/address/0x2A081D94C3bA4183bBFd907A39Ad1597DD9261a1) |
+
+## Sample Celo transactions
+
+These transactions provide verifiable examples of x402go's onchain activity.
+
+| Sample | Transaction |
+| --- | --- |
+| Settlement 1 | [`0x4f364cd4a0ba686707bd6a46ca5cbfcfecfe52c0c99a8647d088a54cd82653e8`](https://celoscan.io/tx/0x4f364cd4a0ba686707bd6a46ca5cbfcfecfe52c0c99a8647d088a54cd82653e8) |
+| Settlement 2 | [`0x2dfe1b2eb87a3629dd25c46824280d1174069252b5f348faea3eb43773bc26dc`](https://celoscan.io/tx/0x2dfe1b2eb87a3629dd25c46824280d1174069252b5f348faea3eb43773bc26dc) |
+| Settlement 3 | [`0x3019a8931676cae28e2cd1645bf36f29f0be290ece5b6d1ba8e875ee91340ab8`](https://celoscan.io/tx/0x3019a8931676cae28e2cd1645bf36f29f0be290ece5b6d1ba8e875ee91340ab8) |
+| Settlement 4 | [`0x08dccbf0e80d88f2e449194d203487047459d8c23ebfeafedd7c2b824b65a998`](https://celoscan.io/tx/0x08dccbf0e80d88f2e449194d203487047459d8c23ebfeafedd7c2b824b65a998) |
