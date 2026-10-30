@@ -1,32 +1,30 @@
 ---
 name: x402go
-description: Integrate x402Go — a facilitator proxy and accounting layer over the Celo x402 facilitator. Charge for an API with x402 payments and get paid into a deterministic merchant vault.
+description: Integrate x402Go — a Celo x402 facilitator and accounting layer. Charge for an API with x402 payments and get paid into a deterministic merchant vault.
 license: MIT
 ---
 
 # x402Go — integration skill
 
-x402Go speaks the x402 protocol at the URLs a client already knows, so pointing an
-x402 resource server at x402Go instead of at Celo is a one-line change to the
-facilitator URL.
+x402Go speaks the x402 protocol directly. Point an x402 resource server at the
+x402go facilitator URL and provide the merchant API key.
 
-Everything below is x402Go's actual behaviour. Where it differs from Celo's
-facilitator, this document is the one to follow.
 
 ## What x402Go is
 
-- A **proxy and accounting layer** over the Celo facilitator. It does not
-  implement x402 and it does not settle anything itself.
+- An **independently operated x402 facilitator**, forked from
+  [Hydraprotocol402/Hydra-Facilitator](https://github.com/Hydraprotocol402/Hydra-Facilitator).
+  It validates signed payments and submits settlement transactions to Celo.
 - A **merchant account system**. A merchant signs in with a wallet, gets an API
   key, and is given a deterministic **vault address** that is their `payTo`.
 - An **accounting boundary**. `POST /settle` is the only endpoint that records a
-  payment, and the record is written *before* Celo is called.
+  payment.
 
 Request path:
 
 ```
 x402 client → x402Go (authenticate merchant → resolve vault → validate → fee guard)
-            → Celo facilitator → Celo → merchant vault
+            → x402go facilitator → Celo → merchant vault
 ```
 
 ## Facts you must not get wrong
@@ -40,7 +38,7 @@ x402 client → x402Go (authenticate merchant → resolve vault → validate →
    never a float, never a JSON number. `"1002000"` is $1.002 in USDC (6
    decimals).
 5. **`x402Version` must be `2`.** Version 1 is refused, not reinterpreted.
-6. **`scheme` must be `exact`.** It is the only scheme Celo settles.
+6. **`scheme` must be `exact`.** It is the only scheme x402go currently settles.
 7. **The merchant is taken from the API key**, never from the request body.
    There is no merchant or vault field you can set.
 8. **`POST /verify` changes nothing.** It writes no record and moves no money.
@@ -95,17 +93,17 @@ Failure modes, both `401`:
 A missing key and an invalid one are deliberately distinguishable; an unknown key
 and a rotated-away one are not.
 
-> Never send your x402Go API key to `api.x402.celo.org`. It is not a Celo
-> credential and Celo does not know it.
+> Send the x402Go API key only to your x402go deployment. It authenticates the
+> merchant-facing API and is not a blockchain or wallet credential.
 
 ## Supported networks and assets
 
 Two networks, addressed in **CAIP-2** form:
 
-| Network | CAIP-2 | chainId | Facilitator |
+| Network | CAIP-2 | chainId | x402go support |
 |---|---|---|---|
-| Celo Mainnet | `eip155:42220` | 42220 | `https://api.x402.celo.org` |
-| Celo Sepolia | `eip155:11142220` | 11142220 | `https://api.x402.sepolia.celo.org` |
+| Celo Mainnet | `eip155:42220` | 42220 | Enabled |
+| Celo Sepolia | `eip155:11142220` | 11142220 | Enabled |
 
 The bare keys `celo` and `celoSepolia`, and the legacy spellings `celo` /
 `celo-sepolia`, are also accepted inside `paymentRequirements.network`. Anything
@@ -359,15 +357,15 @@ Two different situations, and neither is safe to retry blindly:
 }
 ```
 
-Only one failure proves nothing was sent — a missing Celo credential — and that
-one is recorded as `failed`, not left for reconciliation.
+Only one failure proves nothing was sent — a missing operator configuration —
+and that one is recorded as `failed`, not left for reconciliation.
 
 ## Fee model
 
 | Component | Amount |
 |---|---|
 | x402Go fee | $0.001 |
-| Celo facilitator fee | $0.001 |
+| Settlement operator fee | $0.001 |
 | **Total** | **$0.002** |
 
 The guard is `paymentAmount > totalFee`, in the asset's own atomic units, as
@@ -526,7 +524,7 @@ it x402Go are the facilitator URL and the `payTo` address.
 import { HTTPFacilitatorClient } from '@x402/core/server';
 
 export const facilitator = new HTTPFacilitatorClient({
-  url: 'http://localhost:8000',                 // x402Go, not api.x402.celo.org
+  url: 'http://localhost:8000',                 // x402Go's own facilitator
   createAuthHeaders: async () => {
     const h = { 'X-API-Key': process.env.X402GO_API_KEY! };
     return { verify: h, settle: h, supported: h };
@@ -592,7 +590,7 @@ never leaves that server.
 ## Verify your integration
 
 ```bash
-# 1. x402Go is up and can reach Celo
+# 1. x402Go is up and its facilitator is ready
 curl 'http://localhost:8000/supported?network=celo' | jq '.kinds[0].network'
 
 # 2. Your key authenticates
@@ -630,5 +628,5 @@ Test on **Celo Sepolia** (`eip155:11142220`, USDC
 - Celo x402 integration guide: https://x402.celo.org/skill.md
 - Celo x402 documentation: https://docs.celo.org/build/agents/x402
 - x402 protocol specification (v2): https://github.com/coinbase/x402/blob/main/specs/x402-specification-v2.md
-- Celo facilitator (mainnet): https://api.x402.celo.org
-- Celo facilitator (Sepolia): https://api.x402.sepolia.celo.org
+- x402go facilitator source: https://github.com/Hydraprotocol402/Hydra-Facilitator
+- x402go facilitator package: `backend/facilitator`
