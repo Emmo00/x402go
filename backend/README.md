@@ -119,6 +119,17 @@ Once the server is running, visit:
 - **Swagger UI**: `http://localhost:3033/api-docs`
 - **OpenAPI JSON**: `http://localhost:3033/api-docs.json`
 
+## Health checks
+
+- `GET /health` is a dependency-free liveness check for deploys and uptime monitors.
+- `GET /health/ready` checks MongoDB and the configured settlement chains. It returns
+  `503` only when the database is unavailable or every chain RPC is unavailable.
+- Set `GIT_SHA` during deployment to identify the running version in `/health`.
+- Set `HEALTH_TOKEN` to allow the `x-health-token` header to receive readiness details.
+  Unauthenticated callers receive only the readiness status.
+
+The scheduled GitHub Actions check uses the `BACKEND_URL` repository variable.
+
 The API documentation is automatically generated from your route definitions and Swagger comments.
 
 ## Testing

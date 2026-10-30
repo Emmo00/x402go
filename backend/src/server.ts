@@ -10,6 +10,7 @@ import TransactionTagRoute from './routes/transactionTag.route';
 import FacilitatorRoute from './routes/facilitator.route';
 import SkillRoute from './routes/skill.route';
 import validateEnv from './utils/validateEnv';
+import HealthRoute from './routes/health.route';
 
 validateEnv();
 
@@ -23,6 +24,7 @@ const app = new App([
   new SkillRoute(),
   new TransactionTagRoute(),
   new FacilitatorRoute(),
+  new HealthRoute(),
 ]);
 
 app.listen();

@@ -1,0 +1,33 @@
+name: Check backend health
+
+on:
+  schedule:
+    - cron: '*/20 * * * *'
+  workflow_dispatch:
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    env:
+      BACKEND_URL: ${{ vars.BACKEND_URL }}
+    steps:
+      - name: Check liveness
+        run: |
+          set -euo pipefail
+          test -n "$BACKEND_URL"
+          curl --fail --silent --show-error --max-time 10 "$BACKEND_URL/health" > live.json
+          grep -q '"status":"ok"' live.json
+
+      - name: Check readiness
+        run: |
+          set -euo pipefail
+          status_code="$(curl --silent --show-error --max-time 10 \
+            --output ready.json --write-out '%{http_code}' \
+            "$BACKEND_URL/health/ready")"
+          if [ "$status_code" = "503" ]; then
+            echo "Backend readiness is down:"
+            cat ready.json
+            exit 1
+          fi
+          test "$status_code" = "200"
+          grep -Eq '"status":"(ok|degraded)"' ready.json
