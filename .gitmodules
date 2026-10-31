@@ -8,3 +8,6 @@
 	path = backend/facilitator
 	url = https://github.com/Emmo00/x402go-facilitator.git
 	branch = main
+[submodule "docs"]
+	path = docs
+	url = https://github.com/Emmo00/documentation.git
