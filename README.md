@@ -19,6 +19,25 @@ settlement.
 - [API reference](https://docs.x402go.online/api-reference/overview.md)
 - [Security and contracts](https://docs.x402go.online/guides/security.md)
 
+## Clone the repository
+
+Clone the repository together with all of its submodules:
+
+```powershell
+git clone --recurse-submodules https://github.com/Emmo00/x402go.git
+cd x402go
+```
+
+If you already cloned the repository without submodules, fetch their contents
+with:
+
+```powershell
+git submodule update --init --recursive
+```
+
+This checks out the contracts libraries, facilitator package, and documentation
+submodules referenced by the repository.
+
 ## Run locally in demo mode
 
 Demo mode starts the backend without MongoDB, wallet secrets, or public RPC

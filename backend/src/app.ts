@@ -5,6 +5,7 @@ import hpp from 'hpp';
 import mongoose from 'mongoose';
 import logger from 'morgan';
 import errorMiddleware from './middlewares/error.middleware';
+import notFoundMiddleware from './middlewares/notFound.middleware';
 import swaggerIgnite from './utils/swaggerIgnite';
 import session from 'express-session';
 import MongoStore from 'connect-mongo';
@@ -92,6 +93,7 @@ class App {
   }
 
   private initializeErrorHandling() {
+    this.app.use(notFoundMiddleware);
     this.app.use(errorMiddleware);
   }
 

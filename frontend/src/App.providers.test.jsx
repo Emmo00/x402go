@@ -70,13 +70,13 @@ describe('provider tree', () => {
     ).toBeInTheDocument();
   });
 
-  test('renders an unknown path as the landing page', () => {
+  test('renders a not-found page for an unknown path', () => {
     renderApp('/nope');
 
     expect(
       screen.getByRole('heading', {
         level: 1,
-        name: 'Start accepting x402 payments immediately.',
+        name: 'Page not found',
       }),
     ).toBeInTheDocument();
   });

@@ -40,6 +40,18 @@ function Landing() {
   );
 }
 
+function NotFound() {
+  return (
+    <main className="container">
+      <h1>Page not found</h1>
+      <p>The page you requested does not exist.</p>
+      <a className="btn btn--primary" href="/">
+        Back to x402Go
+      </a>
+    </main>
+  );
+}
+
 export default function App() {
   return (
     <>
@@ -74,7 +86,7 @@ export default function App() {
         <Route path="settings" element={<Settings />} />
       </Route>
 
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="*" element={<NotFound />} />
       </Routes>
     </>
   );

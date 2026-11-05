@@ -1,7 +1,23 @@
 {
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/signup",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/dashboard",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/dashboard/overview",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/dashboard/api-keys",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/dashboard/settings",
       "destination": "/index.html"
     }
   ]
